@@ -1,0 +1,47 @@
+# Archivos Python
+*.pyc
+*.pyo
+__pycache__/
+*.pyd
+*.db
+
+# Archivos específicos de entornos virtuales
+venv/
+env/
+.venv/
+.env/
+
+# Archivos de configuración de IDEs
+.vscode/
+.idea/
+
+# Archivos de log
+*.log
+
+# Archivos de base de datos locales
+*.sqlite3
+
+# Archivos de compilación de paquetes
+build/
+dist/
+*.egg-info/
+
+# Archivos de configuraciones específicas de Docker
+.docker/
+
+# Archivos de dependencias
+*.egg
+
+# Archivos de cache
+*.pyc
+*.pyo
+__pycache__/
+
+# Archivos de configuración de test
+.coverage
+nosetests.xml
+coverage.xml
+*.cover
+
+# Dependencias de FastAPI y otros módulos (para evitar subir directorios como "node_modules" si utilizas frontend)
+node_modules/
