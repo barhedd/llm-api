@@ -2,7 +2,10 @@ import os
 import re
 import json
 import csv
+import time
+import socket
 import requests
+import subprocess
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -13,7 +16,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*","http://localhost:5173","http://localhost:5173/*","http://localhost:8000/*"],  # o especificá ["http://localhost:5173"] por ejemplo
+    allow_origins=["*"],  # o especificá ["http://localhost:5173"]
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -21,12 +24,15 @@ app.add_middleware(
 
 DIRECTORIO_NOTICIAS = "noticias"
 OLLAMA_API_URL = "http://localhost:11434/api/generate"
-MODEL_NAME = "gemma3:12b"
-CSV_FILE = "resultados_derechos.csv"  # Archivo CSV para guardar los resultados
+OLLAMA_HOST = "localhost"
+OLLAMA_PORT = 11434
+MODEL_NAME = "gemma2:9b"
+CSV_FILE = "resultados_derechos.csv"
 
 class DatosProcesamiento(BaseModel):
     fechas: List[str]
     derechos: List[str]
+
 
 def leer_noticias_por_fecha(fecha: str) -> List[str]:
     noticias = []
@@ -345,7 +351,6 @@ def extraer_lugares_candidatos(noticias: List[str]) -> List[str]:
                 coincidencias.append(ubicacion["distrito"])
                 break
 
-    print(coincidencias)
     return coincidencias
 
 def construir_prompt(derechos: List[str], noticias: List[str], fecha: str) -> str:
@@ -355,7 +360,7 @@ def construir_prompt(derechos: List[str], noticias: List[str], fecha: str) -> st
     prompt = (
         f"A continuación tienes un conjunto de noticias del día {fecha}. Cada noticia está numerada:\n\n"
         f"{lista_noticias}\n\n"
-        f"Tu tarea es analizar **cada noticia por separado** y clasificarla según los siguientes derechos humanos:\n"
+        f"Tu tarea es analizar *cada noticia por separado* y clasificarla según los siguientes derechos humanos:\n"
         f"{lista_derechos}\n\n"
         f"Esta es la lista oficial y completa de distritos de El Salvador:\n"
         f"{lista_distritos}\n\n"
@@ -372,7 +377,36 @@ def construir_prompt(derechos: List[str], noticias: List[str], fecha: str) -> st
     )
     return prompt
 
+def esta_ollama_levantado(host=OLLAMA_HOST, port=OLLAMA_PORT):
+    try:
+        with socket.create_connection((host, port), timeout=1):
+            return True
+    except OSError:
+        return False
+
+def verificar_y_levantar_ollama():
+    if not esta_ollama_levantado():
+        print("🟡 Ollama no está corriendo. Intentando levantarlo...")
+        try:
+            subprocess.Popen(["ollama", "serve"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            for i in range(10):
+                if esta_ollama_levantado():
+                    print("✅ Ollama levantado correctamente.")
+                    return True
+                time.sleep(1)
+            print("❌ No se pudo levantar Ollama después de varios intentos.")
+            return False
+        except Exception as e:
+            print("❌ Error al intentar levantar Ollama:", e)
+            return False
+    else:
+        print("✅ Ollama ya está corriendo.")
+        return True
+
 def obtener_respuesta_ollama(prompt: str):
+    if not verificar_y_levantar_ollama():
+        return "[]"
+    
     payload = {"model": MODEL_NAME, "prompt": prompt, "temperature": 0, "top_p": 1, "stop": ["\n\n"]}
     response = requests.post(OLLAMA_API_URL, json=payload)
 
@@ -411,14 +445,11 @@ def obtener_respuesta_ollama(prompt: str):
         else: 
             print("⚠️ El JSON no tiene la estructura esperada.")
             return "[]"
-
     except Exception as e:
         print("❌ Error procesando respuesta:", e)
         return "[]"
 
-
 def guardar_resultados_en_csv(resultados: List[dict]):
-    # Verificar si el archivo no existe para agregar encabezado
     nuevo_archivo = not os.path.exists(CSV_FILE)
 
     with open(CSV_FILE, mode="a", newline="", encoding="utf-8") as file:
@@ -459,13 +490,11 @@ def procesar_derechos(datos: DatosProcesamiento):
         resultados.append({
             "fecha": fecha,
             "conteo": conteo,
-            "respuesta_cruda": respuesta_str  # Esto se guarda solo en el CSV
+            "respuesta_cruda": respuesta_str
         })
 
-    # Guardar únicamente en CSV la respuesta cruda por fecha
     guardar_resultados_en_csv(resultados)
 
-    # Devolver solo la parte que el frontend necesita
     return JSONResponse(content={
         "resultados": [
             {"fecha": r["fecha"], "conteo": r["conteo"]}
