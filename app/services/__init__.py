@@ -1,1 +1,0 @@
-from .analysis_service import get_all_rights
