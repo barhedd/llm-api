@@ -1,27 +1,3 @@
-import os
-import re
-import json
-import csv
-import time
-import socket
-import requests
-import subprocess
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-from typing import List
-from fastapi.middleware.cors import CORSMiddleware
-
-app = FastAPI()
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # o especificá ["http://localhost:5173"]
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 DIRECTORIO_NOTICIAS = "noticias"
 OLLAMA_API_URL = "http://localhost:11434/api/generate"
 OLLAMA_HOST = "localhost"
@@ -32,7 +8,6 @@ CSV_FILE = "resultados_derechos.csv"
 class DatosProcesamiento(BaseModel):
     fechas: List[str]
     derechos: List[str]
-
 
 def leer_noticias_por_fecha(fecha: str) -> List[str]:
     noticias = []
@@ -62,7 +37,6 @@ def cargar_noticias_desde_archivos() -> list[str]:
 
     return noticias
 
-def crear_diccionario_ubicaciones() -> List[dict]:
     lista_distritos = [
         "Atiquizaya, Ahuachapán Norte, Ahuachapán",
         "El Refugio, Ahuachapán Norte, Ahuachapán",
@@ -338,7 +312,6 @@ def crear_diccionario_ubicaciones() -> List[dict]:
     ]
 
     return ubicaciones_es
-
 def extraer_lugares_candidatos(noticias: List[str]) -> List[str]:
     texto_total = noticias.lower()
     ubicaciones = crear_diccionario_ubicaciones()
@@ -473,7 +446,7 @@ def procesar_derechos(datos: DatosProcesamiento):
         if not noticias:
             resultados.append({
                 "fecha": fecha,
-                "conteo": [{"derecho": d, "cantidad": 0, "lugar": [""]} for d in datos.derechos],
+                "conteo": [{"derecho": d, "cantidad": 0, "lugares": [""]} for d in datos.derechos],
                 "respuesta_cruda": "No hay noticias disponibles para esta fecha."
             })
             continue
