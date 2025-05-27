@@ -10,5 +10,5 @@ router = APIRouter()
 
 @router.get("/", response_model=list[RightSchema.RightRead])
 def read_rights(db: Session = Depends(get_db)):
-    return RightService.get_all_rights(db)
+    return RightService.get_all_visible_rights(db)
 

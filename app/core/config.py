@@ -1,4 +1,5 @@
 NEWS_PATH = "noticias"
+NEWS_JSON_FILE = "news/news.json"
 OLLAMA_API_URL = "http://localhost:11434/api/generate"
 OLLAMA_HOST = "localhost"
 OLLAMA_PORT = 11434

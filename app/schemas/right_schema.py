@@ -9,6 +9,7 @@ class RightCreate(RightBase):
 
 class RightRead(RightBase):
     id_right: UUID
+    order: int
 
     class Config:
         orm_mode = True

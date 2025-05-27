@@ -1,6 +1,7 @@
 import os
 import csv
-from typing import List
+import json
+from typing import List, Dict
 
 from app.core import config
 
@@ -16,6 +17,24 @@ def read_news_by_date(date: str) -> List[str]:
                 if content:
                     news.append(content)
     return news
+
+def read_news_from_json_by_date(date: str) -> List[Dict[str, str]]:
+    noticias_filtradas = []
+    if not os.path.exists(config.NEWS_JSON_FILE):
+        return noticias_filtradas
+
+    with open(config.NEWS_JSON_FILE, "r", encoding="utf-8") as f:
+        try:
+            all_news = json.load(f)
+        except json.JSONDecodeError:
+            print("❌ Error al cargar el JSON de noticias.")
+            return []
+
+    for noticia in all_news:
+        if noticia.get("fecha") == date:
+            noticias_filtradas.append(noticia)
+
+    return noticias_filtradas
 
 def save_results_in_csv(resultados: List[dict]):
     nuevo_archivo = not os.path.exists(config.CSV_FILE)
