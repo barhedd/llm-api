@@ -8,7 +8,7 @@ class Analysis(Base):
     
     id_analysis = Column(UNIQUEIDENTIFIER, primary_key=True, index=True)
     content = Column(String, nullable=False)
-    anaylisis_date = Column(DateTime, nullable=False)
+    analysis_date = Column(DateTime, nullable=False)
     id_news = Column(UNIQUEIDENTIFIER, ForeignKey("news.id_news"), nullable=False)
     
     news = relationship("News", back_populates="analyses")

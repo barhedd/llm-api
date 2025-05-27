@@ -1,17 +1,24 @@
 import json
 from fastapi import FastAPI, APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
 from fastapi.responses import JSONResponse
+from datetime import datetime
 
 # NUEVAS IMPORTACIONES
+from app.database import get_db
 from app.core import config
 from app.utils import files_helpers as FilesHelpers
 from app.schemas.process_news_request import ProcessNewsRequest
 from app.services import news_processor_service as NewsProcessorService
+from app.services import analysis_right_service as AnalysisRightService
+from app.services import analysis_service as AnalysisService
+from app.services import news_service as NewsService
+from app import models
 
 router = APIRouter()
 
 @router.post("/process")
-def process_rights(data: ProcessNewsRequest):
+def process_rights(data: ProcessNewsRequest, db: Session = Depends(get_db)):
     all_results = []
     detailed_analysis = []  # 🔍 Análisis por noticia
 
@@ -47,6 +54,33 @@ def process_rights(data: ProcessNewsRequest):
                 "derechos_analizados": data.rights,
                 "respuesta": analisis
             })
+
+            # 💾 Guardar noticia
+            noticia_guardada = NewsService.save_news(
+                db,
+                headline=noticia["titular"],
+                content=noticia["contenido"],
+                news_date=datetime.strptime(noticia["fecha"], "%Y-%m-%d")  # Asegúrate del formato
+            )
+
+            # 💾 Guardar análisis
+            analisis_guardado = AnalysisService.save_analysis(
+                db,
+                content=json.dumps(analisis, ensure_ascii=False),
+                news_id=noticia_guardada.id_news,
+                analysis_date=datetime.now()
+            )
+
+            # 💾 Obtener IDs de derechos mencionados
+            derechos_db = db.query(models.Right).filter(models.Right.right.in_(data.rights)).all()
+            derechos_ids = [d.id_right for d in derechos_db]
+
+            # 💾 Guardar relaciones en analysis_right
+            AnalysisRightService.link_rights_to_analysis(
+                db,
+                analysis_id=analisis_guardado.id_analysis,
+                rights_ids=derechos_ids
+            )
 
             # 📊 Acumular conteo total por derecho
             for item in analisis:
