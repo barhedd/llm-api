@@ -37,14 +37,46 @@ def process_rights(data: ProcessNewsRequest, db: Session = Depends(get_db)):
 
         for noticia in news_list:
             print("DEBUG noticia:", noticia)
-            prompt = NewsProcessorService.build_prompt(data.rights, [noticia], date)  # 👈 Una sola noticia
-            respuesta_str = NewsProcessorService.get_ollama_response(prompt)
+            
+            # 💾 Verificar si ya existe la noticia
+            noticia_existente = db.query(models.News).filter_by(
+                headline=noticia["titular"],
+                news_date=noticia["fecha"]
+            ).first()
 
-            try:
-                analisis = json.loads(respuesta_str)
-            except Exception as e:
-                print("❌ Error al parsear JSON:", e)
-                analisis = [{"derecho": d, "cantidad": 0, "lugares": []} for d in data.rights]
+            analisis_previo = None
+
+            if noticia_existente:
+                # ✅ Buscar análisis asociado a esa noticia
+                analisis_previo = db.query(models.Analysis).filter_by(
+                    id_news=noticia_existente.id_news
+                ).order_by(models.Analysis.analysis_date.desc()).first()
+
+                if analisis_previo:
+                    # ✅ Obtener derechos asociados a ese análisis
+                    derechos_analisis = db.query(models.AnalysisRight).join(models.Right).filter(
+                        models.AnalysisRight.id_analysis == analisis_previo.id_analysis
+                    ).with_entities(models.Right.right).all()
+
+                    derechos_analisis_set = set(d[0] for d in derechos_analisis)
+
+                    # ✅ Comprobar si los derechos solicitados están todos en el análisis previo
+                    if set(data.rights).issubset(derechos_analisis_set):
+                        print("✔️ Usando análisis previo")
+                        analisis = json.loads(analisis_previo.content)
+                    else:
+                        analisis_previo = None  # Hay análisis pero con otros derechos
+
+            if not analisis_previo:
+                # ❌ No hay análisis previo compatible, usar el LLM
+                prompt = NewsProcessorService.build_prompt(noticia, date, data.rights)
+                respuesta_str = NewsProcessorService.get_ollama_response(prompt)
+
+                try:
+                    analisis = json.loads(respuesta_str)
+                except Exception as e:
+                    print("❌ Error al parsear JSON:", e)
+                    analisis = [{"derecho": d, "cantidad": 0, "lugares": []} for d in data.rights]
 
             # 📦 Acumular resultado para guardar en DB
             detailed_analysis.append({
@@ -103,7 +135,7 @@ def process_rights(data: ProcessNewsRequest, db: Session = Depends(get_db)):
 
     # 💾 Guardar en CSV o DB si es necesario
     FilesHelpers.save_results_in_csv(all_results)
-    # DatabaseHelpers.save_news_analysis_batch(detailed_analysis)  # 💾 Nuevo paso
+
 
     return JSONResponse(content={
         "resultados": [{"fecha": r["fecha"], "conteo": r["conteo"]} for r in all_results]
