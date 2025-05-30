@@ -1,4 +1,5 @@
 import json
+import os
 from fastapi import FastAPI, APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from fastapi.responses import JSONResponse
@@ -8,11 +9,13 @@ from datetime import datetime
 from app.database import get_db
 from app.core import config
 from app.utils import files_helpers as FilesHelpers
+from app.utils import logger as Logger
 from app.schemas.process_news_request import ProcessNewsRequest
 from app.services import news_processor_service as NewsProcessorService
 from app.services import analysis_right_service as AnalysisRightService
 from app.services import analysis_service as AnalysisService
 from app.services import news_service as NewsService
+from app.services import extract_news_service as TextMiner
 from app import models
 
 router = APIRouter()
@@ -142,3 +145,13 @@ def process_rights(data: ProcessNewsRequest, db: Session = Depends(get_db)):
     return JSONResponse(content={
         "resultados": [{"fecha": r["fecha"], "conteo": r["conteo"]} for r in all_results]
     })
+
+@router.post("/extract")
+def extract_news(folder_name : str):
+
+    pdf_files = TextMiner.leer_pdf(folder_name)
+    text_extracted = TextMiner.extraer_texto_pdf(pdfs=pdf_files)
+    fecha = TextMiner.extraer_fecha_pdf(text_extracted[0])
+    news_separated = TextMiner.separar_noticias(text_extracted)
+    json_output = TextMiner.formatear_json(fecha, news_separated)
+    FilesHelpers.save_news_in_json(json_output)
