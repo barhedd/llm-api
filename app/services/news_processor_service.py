@@ -2,44 +2,34 @@ import re
 import requests
 import json
 from typing import List
+from collections import defaultdict
 
 from app.utils import ollama_helpers as OllamaHelpers
 from app.data import locations as Locations
-from app.core import config
+from app.core import config, prompts
 
-def build_prompt(derechos: List[str], noticias: List[str], fecha: str) -> str:
-    lista_noticias = "\n\n".join([f"Noticia {i+1}:\n{n}" for i, n in enumerate(noticias)])
+def build_prompt(noticia: dict, fecha: str, derechos: List[str]) -> str:
+    texto = noticia["contenido"]
+    lista_noticias = f"1. {texto}"
     lista_derechos = "\n".join(f"- {d}" for d in derechos)
-    lista_distritos = get_candidates_locations(lista_noticias)
-    prompt = (
-        f"A continuación tienes un conjunto de noticias del día {fecha}. Cada noticia está numerada:\n\n"
-        f"{lista_noticias}\n\n"
-        f"Tu tarea es analizar *cada noticia por separado* y clasificarla según los siguientes derechos humanos:\n"
-        f"{lista_derechos}\n\n"
-        f"Esta es la lista oficial y completa de distritos de El Salvador:\n"
-        f"{lista_distritos}\n\n"
-        f"INSTRUCCIONES MUY ESTRICTAS:\n"
-        f"- Para cada noticia, identifica los derechos humanos aplicables *únicamente* de la lista proporcionada.\n"
-        f"- Debes trabajar con cada temática de derechos humanos propoporcionada.\n"
-        f"- Luego, extrae el lugar o lugares *exactos* donde ocurre la noticia, *pero solo si aparece exactamente como está en la lista de distritos.*\n"
-        f"- No adivines lugares. No infieras lugares. No escribas nombres que no estén en el texto original.\n"
-        f"- Si no encuentras una coincidencia exacta entre la noticia y la lista de distritos, no escribas ningún lugar.\n"
-        f"- Si y solo un derecho no tiene mención en ninguna noticia, inclúyelo con \"cantidad\": 0 y \"lugares\": [].\n"
-        f"- Nunca uses valores null. Siempre incluye todas las claves: \"derecho\", \"cantidad\" y \"lugares\".\n"
-        f"- Devuélveme la respuesta exclusivamente en formato JSON (sin explicaciones ni texto adicional), con esta estructura:\n"
-        f'[{{"derecho": "derecho", "cantidad": numero_de_noticias_relacionadas, "lugares": ["nombre_del_lugar", ...]}}, ...]'
-    )
-    return prompt
+    lista_distritos = get_candidates_locations(texto)
 
-def get_candidates_locations(noticias: List[str]) -> List[str]:
-    texto_total = noticias.lower()
+    return prompts.BASE_PROMPT.substitute(
+        fecha=fecha,
+        lista_noticias=lista_noticias,
+        lista_derechos=lista_derechos,
+        lista_distritos="\n".join(f"- {d}" for d in lista_distritos)
+    )
+
+
+def get_candidates_locations(noticia: str) -> List[str]:
     ubicaciones = Locations.get_el_salvador_locations()
     coincidencias = []
 
     for ubicacion in ubicaciones:
         for clave in ["distrito"]:
             valor = ubicacion["distrito"].lower()
-            if re.search(rf'\b{re.escape(valor)}\b', texto_total):
+            if re.search(rf'\b{re.escape(valor)}\b', noticia):
                 coincidencias.append(ubicacion["distrito"])
                 break
 
