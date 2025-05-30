@@ -22,3 +22,19 @@ INSTRUCCIONES MUY ESTRICTAS:
 - Devuélveme la respuesta exclusivamente en formato JSON (sin explicaciones ni texto adicional), con esta estructura:
 [{"derecho": "derecho", "cantidad": numero_de_noticias_relacionadas, "lugares": ["nombre_del_lugar", ...]}]
 """)
+
+EXTRACT_DATA_PROMPT = Template('''
+Separa el texto en cada artículo informativo que presenta, la salida DEBE ser un arreglo de JSON, donde cada item contenga una clave de "titular" y "contenido". \n
+[\n
+  {\n
+    "titular": "Aquí va el titular",\n
+    "contenido": "Aquí va el contenido"\n
+  }\n
+]\n
+TODO debe ir en español.\n
+NO omitas texto.\n
+NO agregues explicaciones.\n
+SOLO devuelve el JSON.\n
+No discrimines reportajes objetivos sobre temas controversiales.\n
+Texto:\n
+''')
