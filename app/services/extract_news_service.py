@@ -41,20 +41,30 @@ def extraer_texo(prompt: str) -> str:
     print(response)
     return response.message.content
 
-
 def extraer_texto_pdf(pdfs: List[str]) -> List[str]:
     logger.info("************************INICIA EXTRACCIÓN TEXTO************************")
     structured_text = []
 
-    parsed = parser.from_file(pdfs[0], xmlContent=True)
-    xml = parsed['content']
-    soup = BeautifulSoup(xml, 'lxml')
-    pages = soup.find_all('div', {'class': 'page'})
+    for pdf_path in pdfs:
+        try:
+            logger.info(f"Procesando archivo: {pdf_path}")
+            parsed = parser.from_file(pdf_path, xmlContent=True)
+            xml = parsed.get('content', '')
+            
+            if not xml:
+                logger.warning(f"No se pudo extraer contenido del archivo: {pdf_path}")
+                continue
+            
+            soup = BeautifulSoup(xml, 'lxml')
+            pages = soup.find_all('div', {'class': 'page'})
 
-    for i, page in enumerate(pages):
-        text = page.get_text(separator='\n', strip=True)
-        structured_text.append(text)
+            for i, page in enumerate(pages):
+                text = page.get_text(separator='\n', strip=True)
+                structured_text.append(text)
 
+        except Exception as e:
+            logger.error(f"Error al procesar el archivo {pdf_path}: {str(e)}")
+    
     logger.info("************************FINALIZA EXTRACCIÓN TEXTO************************")
     return structured_text
 

@@ -25,6 +25,16 @@ def process_rights(data: ProcessNewsRequest, db: Session = Depends(get_db)):
     all_results = []
     detailed_analysis = []
 
+    pdf_files = TextMiner.leer_pdf("newspaper")
+    text_extracted = TextMiner.extraer_texto_pdf(pdfs=pdf_files)
+
+    print("DEBUG text_extracted:", text_extracted)
+
+    fecha = TextMiner.extraer_fecha_pdf(text_extracted[1])
+    news_separated = TextMiner.separar_noticias(text_extracted)
+    json_output = TextMiner.formatear_json(fecha, news_separated)
+    FilesHelpers.save_news_in_json(json_output)
+
     for date in data.dates:
         news_list = FilesHelpers.read_news_from_json_by_date(date)
 
@@ -164,7 +174,7 @@ def extract_news():
 
     print("DEBUG text_extracted:", text_extracted)
 
-    fecha = TextMiner.extraer_fecha_pdf(text_extracted[0])
+    fecha = TextMiner.extraer_fecha_pdf(text_extracted[1])
     news_separated = TextMiner.separar_noticias(text_extracted)
     json_output = TextMiner.formatear_json(fecha, news_separated)
     FilesHelpers.save_news_in_json(json_output)
