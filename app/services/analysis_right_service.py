@@ -8,4 +8,11 @@ def link_rights_to_analysis(db: Session, analysis_id, rights_ids):
             id_right=right_id
         )
         db.add(link)
-    db.commit() 
+    db.commit()
+
+def get_all_analysis_right(db: Session ):
+    return (
+        db.query(models.AnalysisRight)
+        .all()
+    )
+    

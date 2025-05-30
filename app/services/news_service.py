@@ -14,3 +14,9 @@ def save_news(db: Session, headline: str, content: str, news_date: datetime):
     db.commit()        
     db.refresh(news)
     return news
+
+def get_news(db: Session, title: str, news_date: datetime):
+    return (
+        db.query(models.News)
+        .filter(models.News.headline == title, models.News.news_date == news_date).first()
+    )

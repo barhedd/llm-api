@@ -14,3 +14,15 @@ def save_analysis(db: Session, content: str, news_id, analysis_date: datetime):
     db.commit() 
     db.refresh(analysis)
     return analysis
+
+def get_all_analysis(db: Session ):
+    return (
+        db.query(models.Analysis)
+        .all()
+    )
+
+def get_analysis(db: Session, id_new: str):
+    return (
+        db.query(models.Analysis)
+        .filter(models.Analysis.id_news == id_new)
+    )

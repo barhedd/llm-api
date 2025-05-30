@@ -37,6 +37,12 @@ def process_rights(data: ProcessNewsRequest, db: Session = Depends(get_db)):
 
         for noticia in news_list:
             print("DEBUG noticia:", noticia)
+
+            new = NewsService.get_news(db, noticia["titular"], noticia["fecha"])
+            analysis = AnalysisService.get_analysis(db, new.id_news)
+            for a in analysis:
+                print(a.rights)
+
             prompt = NewsProcessorService.build_prompt(data.rights, [noticia], date)  # 👈 Una sola noticia
             respuesta_str = NewsProcessorService.get_ollama_response(prompt)
 
@@ -68,7 +74,7 @@ def process_rights(data: ProcessNewsRequest, db: Session = Depends(get_db)):
                 db,
                 content=json.dumps(analisis, ensure_ascii=False),
                 news_id=noticia_guardada.id_news,
-                analysis_date=datetime.now()
+                analysis_date=datetime.today()
             )
 
             # 💾 Obtener IDs de derechos mencionados

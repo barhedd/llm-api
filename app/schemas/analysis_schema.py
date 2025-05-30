@@ -7,7 +7,7 @@ from .right_schema import RightRead
 
 class AnalysisBase(BaseModel):
     content: str
-    anaylisis_date: datetime
+    analysis_date: datetime
     id_news: UUID
 
 class AnalysisCreate(AnalysisBase):
