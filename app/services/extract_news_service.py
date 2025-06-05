@@ -3,13 +3,15 @@ import re
 from datetime import datetime
 import json
 from typing import List, Dict, Any
-import ollama
+#import ollama
+from ollama import Client
 from tika import parser
 from bs4 import BeautifulSoup
 from app.utils import logger as Logger
 from app.utils import ollama_helpers as OllamaHelpers
 
 logger = Logger.setup_logger()
+ollama = Client(host='http://127.0.0.1:11434')
 
 def leer_pdf(folder_name: str) -> List[str]:
     logger.info("************************LEYENDO PDFS************************")
