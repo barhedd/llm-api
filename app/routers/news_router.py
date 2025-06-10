@@ -1,29 +1,27 @@
 import json
-import os
-from fastapi import FastAPI, APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
-from fastapi.responses import JSONResponse
 from datetime import datetime
+from typing import List
 
 # NUEVAS IMPORTACIONES
 from app.database import get_db
-from app.core import config
+from app.schemas.endpoints.news_details_schema import NewsDetailsResponse, NewsIdsRequest
+from app.schemas.endpoints.process_news_schema import ProcessNewsRequest, ProcessNewsResponse, ProcessResult, RightCount
 from app.utils import files_helpers as FilesHelpers
-from app.utils import logger as Logger
-from app.schemas.process_news_request import ProcessNewsRequest
 from app.services import news_processor_service as NewsProcessorService
-from app.services import analysis_right_service as AnalysisRightService
-from app.services import analysis_service as AnalysisService
-from app.services import news_service as NewsService
+from app.repositories import analysis_right_repository as AnalysisRightService
+from app.repositories import analysis_repository as AnalysisService
+from app.repositories import news_repository as NewsService
 from app.services import extract_news_service as TextMiner
 from app import models
 
 router = APIRouter()
 
-@router.post("/process")
+@router.post("/process", response_model=ProcessNewsResponse)
 def process_rights(data: ProcessNewsRequest, db: Session = Depends(get_db)):
     all_results = []
-    detailed_analysis = []
+    all_news_id = []
 
     pdf_files = TextMiner.leer_pdf("newspaper")
     text_extracted = TextMiner.extraer_texto_pdf(pdfs=pdf_files)
@@ -61,6 +59,8 @@ def process_rights(data: ProcessNewsRequest, db: Session = Depends(get_db)):
             derechos_previos = set()
 
             if noticia_existente:
+                all_news_id.append(noticia_existente.id_news)
+
                 # ✅ Buscar todos los análisis asociados a esa noticia
                 analisis_asociados = db.query(models.Analysis).filter_by(
                     id_news=noticia_existente.id_news
@@ -108,6 +108,8 @@ def process_rights(data: ProcessNewsRequest, db: Session = Depends(get_db)):
                             content=noticia["contenido"],
                             news_date=datetime.strptime(noticia["fecha"], "%Y-%m-%d")
                         )
+
+                        all_news_id.append(noticia_guardada.id_news)
                     else:
                         noticia_guardada = noticia_existente
 
@@ -154,27 +156,35 @@ def process_rights(data: ProcessNewsRequest, db: Session = Depends(get_db)):
     # 💾 Guardar CSV si es necesario
     FilesHelpers.save_results_in_csv(all_results)
 
-    return JSONResponse(content={
-        "resultados": [{"fecha": r["fecha"], "conteo": r["conteo"]} for r in all_results]
-    })
+    resultados = [
+        ProcessResult(
+            fecha=r["fecha"],
+            conteo=[
+                RightCount(
+                    derecho=item["derecho"],
+                    cantidad=item["cantidad"],
+                    lugares=list(set(item["lugares"]))
+                ) for item in r["conteo"]
+            ]
+        ) for r in all_results
+    ]
+
+    return ProcessNewsResponse(resultados=resultados, noticias=[str(n_id) for n_id in set(all_news_id)])
 
 # @router.post("/extract")
-# def extract_news(folder_name : str):
-#     pdf_files = TextMiner.leer_pdf(folder_name)
+# def extract_news():
+#     pdf_files = TextMiner.leer_pdf("newspaper")
 #     text_extracted = TextMiner.extraer_texto_pdf(pdfs=pdf_files)
-#     fecha = TextMiner.extraer_fecha_pdf(text_extracted[0])
+
+#     print("DEBUG text_extracted:", text_extracted)
+
+#     fecha = TextMiner.extraer_fecha_pdf(text_extracted[1])
 #     news_separated = TextMiner.separar_noticias(text_extracted)
 #     json_output = TextMiner.formatear_json(fecha, news_separated)
 #     FilesHelpers.save_news_in_json(json_output)
 
-@router.post("/extract")
-def extract_news():
-    pdf_files = TextMiner.leer_pdf("newspaper")
-    text_extracted = TextMiner.extraer_texto_pdf(pdfs=pdf_files)
 
-    print("DEBUG text_extracted:", text_extracted)
-
-    fecha = TextMiner.extraer_fecha_pdf(text_extracted[1])
-    news_separated = TextMiner.separar_noticias(text_extracted)
-    json_output = TextMiner.formatear_json(fecha, news_separated)
-    FilesHelpers.save_news_in_json(json_output)
+@router.post("/details", response_model=List[NewsDetailsResponse])
+def obtener_detalle_noticias(payload: NewsIdsRequest, db: Session = Depends(get_db)):
+    noticias = db.query(models.News).filter(models.News.id_news.in_(payload.ids)).all()
+    return noticias

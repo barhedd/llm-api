@@ -1,10 +1,9 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
-from typing import List
 
 from app.database import get_db
-from app.schemas import right_schema as RightSchema
-from app.services import right_service as RightService
+from app.schemas.database import right_schema as RightSchema
+from app.repositories import right_repository as RightService
 
 router = APIRouter()
 
