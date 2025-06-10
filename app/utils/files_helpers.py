@@ -1,7 +1,7 @@
 import os
 import csv
 import json
-import datetime
+from datetime import datetime
 from typing import List, Dict, Any
 
 from app.core import config
@@ -52,10 +52,11 @@ def save_results_in_csv(resultados: List[dict]):
             })
 
 def save_news_in_json(json_output: List[Dict[str, Any]]):
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    filename = f"noticias.json-{timestamp}.json"
+    timestamp = datetime.now().strftime("%Y-%m-%d")
+    # filename = f"noticias.json-{timestamp}.json"
+    filename = f"news.json"
     os.makedirs("resultados", exist_ok=True)
     filepath = os.path.join("resultados", filename)
 
-    with open(filename, "w", encoding="utf-8") as file:
-        json.dump(json_output, filepath, ensure_ascii=False, indent=2)
+    with open(filepath, "w", encoding="utf-8") as file:
+        json.dump(json_output, file, ensure_ascii=False, indent=2)

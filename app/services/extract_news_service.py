@@ -3,12 +3,15 @@ import re
 from datetime import datetime
 import json
 from typing import List, Dict, Any
-import ollama
+#import ollama
+from ollama import Client
 from tika import parser
 from bs4 import BeautifulSoup
-from utils import logger as Logger
+from app.utils import logger as Logger
+from app.utils import ollama_helpers as OllamaHelpers
 
 logger = Logger.setup_logger()
+ollama = Client(host='http://127.0.0.1:11434')
 
 def leer_pdf(folder_name: str) -> List[str]:
     logger.info("************************LEYENDO PDFS************************")
@@ -19,6 +22,9 @@ def leer_pdf(folder_name: str) -> List[str]:
             pdfs.append(os.path.join(folder_name, archivo))
 
     logger.info("************************FINALIZANDO PDFS************************")
+
+    print (pdfs)
+
     return pdfs
 
 def construir_prompts_extraer(instructions: str, text: str) -> str:
@@ -37,20 +43,30 @@ def extraer_texo(prompt: str) -> str:
     print(response)
     return response.message.content
 
-
 def extraer_texto_pdf(pdfs: List[str]) -> List[str]:
     logger.info("************************INICIA EXTRACCIÓN TEXTO************************")
     structured_text = []
 
-    parsed = parser.from_file(pdfs[0], xmlContent=True)
-    xml = parsed['content']
-    soup = BeautifulSoup(xml, 'lxml')
-    pages = soup.find_all('div', {'class': 'page'})
+    for pdf_path in pdfs:
+        try:
+            logger.info(f"Procesando archivo: {pdf_path}")
+            parsed = parser.from_file(pdf_path, xmlContent=True)
+            xml = parsed.get('content', '')
+            
+            if not xml:
+                logger.warning(f"No se pudo extraer contenido del archivo: {pdf_path}")
+                continue
+            
+            soup = BeautifulSoup(xml, 'lxml')
+            pages = soup.find_all('div', {'class': 'page'})
 
-    for i, page in enumerate(pages):
-        text = page.get_text(separator='\n', strip=True)
-        structured_text.append(text)
+            for i, page in enumerate(pages):
+                text = page.get_text(separator='\n', strip=True)
+                structured_text.append(text)
 
+        except Exception as e:
+            logger.error(f"Error al procesar el archivo {pdf_path}: {str(e)}")
+    
     logger.info("************************FINALIZA EXTRACCIÓN TEXTO************************")
     return structured_text
 
@@ -66,9 +82,11 @@ def limpiar_texto(texto: str) -> str:
 
 def extraer_fecha_pdf(text : str) -> str:
     logger.info("************************INICIA EXTRACCIÓN FECHA************************")
-    pattern = r"(\d{1,2}) de (enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre) de (\d{4})"
+    pattern = r"(\d{1,2})de(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)de(\d{4})"
 
-    match = re.search(pattern, text, re.IGNORECASE)
+    final_text = text.replace(" ", "")
+
+    match = re.search(pattern, final_text, re.IGNORECASE)
     if match:
         dia = int(match.group(1))
         mes_texto = match.group(2).lower()
@@ -103,8 +121,13 @@ def extraer_fecha_pdf(text : str) -> str:
         return ''
 
 def separar_noticias(news : List[str]) -> List[str]:
-    h=0
+    h = 0
     logger.info("************************INICIO SEPARACIÓN DE NOTICIAS************************")
+
+    if not OllamaHelpers.verify_and_run_ollama():
+        logger.error("❌ No se pudo iniciar o verificar Ollama. Cancelando separación de noticias.")
+        return []
+
     total_pages = len(news)
     size = 2
     json_news = []
@@ -175,12 +198,15 @@ def formatear_json(strdate: str, json_news: List[str]) -> List[Dict[str, Any]]:
 def procesar_derechos(folder_name : str):
     
     pdf_files = leer_pdf(folder_name)
+
+
+
     text_extracted = extraer_texto_pdf(pdfs=pdf_files)
     fecha = extraer_fecha_pdf(text_extracted[0])
     news_separated = separar_noticias(text_extracted)
     json_output = formatear_json(fecha, news_separated)
 
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    timestamp = datetime.now().strftime("%Y-%m-%d")
     filename = f"noticias.json-{timestamp}.json"
     os.makedirs("resultados", exist_ok=True)
     filepath = os.path.join("resultados", filename)

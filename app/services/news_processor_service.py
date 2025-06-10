@@ -21,7 +21,6 @@ def build_prompt(noticia: dict, fecha: str, derechos: List[str]) -> str:
         lista_distritos="\n".join(f"- {d}" for d in lista_distritos)
     )
 
-
 def get_candidates_locations(noticia: str) -> List[str]:
     ubicaciones = Locations.get_el_salvador_locations()
     coincidencias = []
