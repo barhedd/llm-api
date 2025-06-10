@@ -23,6 +23,7 @@ def process_rights(data: ProcessNewsRequest, db: Session = Depends(get_db)):
     all_results = []
     all_news_id = []
 
+    # 📌 Extraer datos de los PDFs
     pdf_files = TextMiner.leer_pdf("newspaper")
     text_extracted = TextMiner.extraer_texto_pdf(pdfs=pdf_files)
 
@@ -44,12 +45,13 @@ def process_rights(data: ProcessNewsRequest, db: Session = Depends(get_db)):
             })
             continue
 
+        # 📊 Inicializar el conteo de derechos
         conteo_total = {d: {"cantidad": 0, "lugares": []} for d in data.rights}
 
         for noticia in news_list:
             print("DEBUG noticia:", noticia)
 
-            # 💾 Verificar si ya existe la noticia
+            # 💾 Verificar si la noticia existe en la BD
             noticia_existente = db.query(models.News).filter_by(
                 headline=noticia["titular"],
                 news_date=noticia["fecha"]
@@ -61,7 +63,7 @@ def process_rights(data: ProcessNewsRequest, db: Session = Depends(get_db)):
             if noticia_existente:
                 all_news_id.append(noticia_existente.id_news)
 
-                # ✅ Buscar todos los análisis asociados a esa noticia
+                # ✅ Buscar análisis previos asociados
                 analisis_asociados = db.query(models.Analysis).filter_by(
                     id_news=noticia_existente.id_news
                 ).order_by(models.Analysis.analysis_date.desc()).all()
@@ -77,7 +79,7 @@ def process_rights(data: ProcessNewsRequest, db: Session = Depends(get_db)):
                         derechos_previos |= derechos_set
                         analisis_previos.append((analisis, derechos_set))
 
-            # Determinar qué derechos ya han sido analizados
+            # 🔍 Identificar derechos ya analizados y nuevos
             derechos_solicitados = set(data.rights)
             derechos_existentes = derechos_previos & derechos_solicitados
             derechos_nuevos = derechos_solicitados - derechos_previos
@@ -91,7 +93,7 @@ def process_rights(data: ProcessNewsRequest, db: Session = Depends(get_db)):
                         contenido = json.loads(analisis_previo.content)
                         analisis += [item for item in contenido if item["derecho"] in derechos_existentes]
 
-            # ✅ Ejecutar LLM solo para los derechos nuevos
+            # ✅ Ejecutar LLM para nuevos derechos
             if derechos_nuevos:
                 prompt = NewsProcessorService.build_prompt(noticia, date, list(derechos_nuevos))
                 respuesta_str = NewsProcessorService.get_ollama_response(prompt)
@@ -100,7 +102,7 @@ def process_rights(data: ProcessNewsRequest, db: Session = Depends(get_db)):
                     nuevos_items = json.loads(respuesta_str)
                     analisis += nuevos_items
 
-                    # 💾 Guardar noticia solo si no existía
+                    # 💾 Guardar noticia si no existía
                     if not noticia_existente:
                         noticia_guardada = NewsService.save_news(
                             db,
@@ -108,12 +110,11 @@ def process_rights(data: ProcessNewsRequest, db: Session = Depends(get_db)):
                             content=noticia["contenido"],
                             news_date=datetime.strptime(noticia["fecha"], "%Y-%m-%d")
                         )
-
                         all_news_id.append(noticia_guardada.id_news)
                     else:
                         noticia_guardada = noticia_existente
 
-                    # 💾 Guardar nuevo análisis con derechos nuevos
+                    # 💾 Guardar análisis con derechos nuevos
                     analisis_guardado = AnalysisService.save_analysis(
                         db,
                         content=json.dumps(nuevos_items, ensure_ascii=False),
@@ -134,7 +135,7 @@ def process_rights(data: ProcessNewsRequest, db: Session = Depends(get_db)):
                     print("❌ Error al parsear JSON:", e)
                     analisis += [{"derecho": d, "cantidad": 0, "lugares": []} for d in derechos_nuevos]
 
-            # 📊 Acumular conteo total por derecho
+            # 📊 Acumular conteo por derecho
             for item in analisis:
                 derecho = item["derecho"]
                 if derecho in conteo_total:
@@ -156,6 +157,13 @@ def process_rights(data: ProcessNewsRequest, db: Session = Depends(get_db)):
     # 💾 Guardar CSV si es necesario
     FilesHelpers.save_results_in_csv(all_results)
 
+    # 📌 Validar que `all_results` no esté vacío
+    if not all_results:
+        all_results.append({
+            "fecha": "Sin datos",
+            "conteo": [{"derecho": d, "cantidad": 0, "lugares": []} for d in data.rights]
+        })
+
     resultados = [
         ProcessResult(
             fecha=r["fecha"],
@@ -169,7 +177,11 @@ def process_rights(data: ProcessNewsRequest, db: Session = Depends(get_db)):
         ) for r in all_results
     ]
 
-    return ProcessNewsResponse(resultados=resultados, noticias=[str(n_id) for n_id in set(all_news_id)])
+    print("DEBUG: ", all_news_id)
+    
+    noticias = [str(n_id) for n_id in set(all_news_id)] if all_news_id else []
+
+    return ProcessNewsResponse(resultados=resultados, noticias=noticias)
 
 # @router.post("/extract")
 # def extract_news():
