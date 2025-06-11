@@ -1,12 +1,13 @@
 import json
 from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
+from sqlalchemy import func
 from datetime import datetime
 from typing import List
 
 # NUEVAS IMPORTACIONES
 from app.database import get_db
-from app.schemas.endpoints.news_details_schema import NewsDetailsResponse, NewsIdsRequest
+from app.schemas.endpoints.news_details_schema import NewsDetailsRequest, NewsDetailsResponse
 from app.schemas.endpoints.process_news_schema import ProcessNewsRequest, ProcessNewsResponse, ProcessResult, RightCount
 from app.utils import files_helpers as FilesHelpers
 from app.services import news_processor_service as NewsProcessorService
@@ -197,6 +198,71 @@ def process_rights(data: ProcessNewsRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/details", response_model=List[NewsDetailsResponse])
-def obtener_detalle_noticias(payload: NewsIdsRequest, db: Session = Depends(get_db)):
-    noticias = db.query(models.News).filter(models.News.id_news.in_(payload.ids)).all()
-    return noticias
+def obtener_detalle_noticias(payload: NewsDetailsRequest, db: Session = Depends(get_db)):
+    # Subconsulta que calcula row_number
+    analysis_subquery = (
+        db.query(
+            models.Analysis.id_news.label("id_news"),
+            models.Analysis.content.label("analysis_content"),
+            func.row_number().over(
+                partition_by=models.Analysis.id_news,
+                order_by=models.Analysis.analysis_date.desc()
+            ).label("rn")
+        )
+        .subquery()
+    )
+
+    # Alias de la subconsulta
+    LatestAnalysis = aliased(analysis_subquery)
+
+    # Filtrar dentro de otra subconsulta que se limite a rn = 1
+    latest_analysis_only = (
+        db.query(
+            LatestAnalysis.c.id_news,
+            LatestAnalysis.c.analysis_content
+        )
+        .filter(LatestAnalysis.c.rn == 1)
+        .subquery()
+    )
+
+    # Consulta principal
+    query = (
+        db.query(
+            models.News.id_news,
+            models.News.headline,
+            models.News.content,
+            models.News.news_date,
+            latest_analysis_only.c.analysis_content
+        )
+        .outerjoin(
+            latest_analysis_only,
+            latest_analysis_only.c.id_news == models.News.id_news
+        )
+        .filter(models.News.id_news.in_(payload.ids))
+    )
+
+    rows = query.all()
+    resultado = []
+
+    for row in rows:
+        filtered = []
+
+        if row.analysis_content:
+            try:
+                parsed = json.loads(row.analysis_content)
+                filtered = [
+                    d for d in parsed
+                    if d.get("derecho") in payload.rights
+                ]
+            except json.JSONDecodeError:
+                pass  # puedes registrar el error si deseas
+
+        resultado.append(NewsDetailsResponse(
+            id_news=row.id_news,
+            headline=row.headline,
+            content=row.content,
+            news_date=row.news_date,
+            filtered_analysis=filtered
+        ))
+
+    return resultado
