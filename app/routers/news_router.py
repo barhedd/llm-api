@@ -1,5 +1,6 @@
 import json
 from fastapi import APIRouter, Depends
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy import func
 from datetime import datetime
@@ -11,6 +12,7 @@ from app.schemas.endpoints.news_details_schema import NewsDetailsRequest, NewsDe
 from app.schemas.endpoints.process_news_schema import ProcessNewsRequest, ProcessNewsResponse, ProcessResult, RightCount
 from app.utils import files_helpers as FilesHelpers
 from app.services import news_processor_service as NewsProcessorService
+from app.services import fine_tune_service as FineTuneService
 from app.repositories import analysis_right_repository as AnalysisRightService
 from app.repositories import analysis_repository as AnalysisService
 from app.repositories import news_repository as NewsService
@@ -34,6 +36,9 @@ def process_rights(data: ProcessNewsRequest, db: Session = Depends(get_db)):
     news_separated = TextMiner.separar_noticias(text_extracted)
     json_output = TextMiner.formatear_json(fecha, news_separated)
     FilesHelpers.save_news_in_json(json_output)
+
+    # Aplicar Fine-Tunning
+    FineTuneService.fine_tune_llm()
 
     for date in data.dates:
         news_list = FilesHelpers.read_news_from_json_by_date(date)
