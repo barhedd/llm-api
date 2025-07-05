@@ -1,12 +1,77 @@
 import re
+from uuid import uuid4
 import requests
 import json
 from typing import List
-from collections import defaultdict
-
+from app.models.analysis import Analysis
+from app.models.analysis_detail import AnalysisDetail
+from app.models.news import News
+from app.models.right import Right
 from app.utils import ollama_helpers as OllamaHelpers
 from app.data import locations as Locations
 from app.core import config, prompts
+from sqlalchemy.orm import Session
+from typing import List, Tuple, Optional
+from datetime import datetime
+
+def get_missing_rights_for_news(
+    db: Session,
+    headline: str,
+    date: str,
+    requested_right_names: List[str]
+) -> Tuple[Optional[News], Optional[Analysis], List[Right]]:
+    """
+    Verifica qué derechos aún no han sido analizados para una noticia dada.
+    Retorna la noticia (creada o existente), el análisis (creado o existente) y los derechos faltantes.
+    """
+    parsed_date = datetime.strptime(date, "%Y-%m-%d")
+
+    # 1. Buscar o crear la noticia
+    news_entity = (
+        db.query(News)
+        .filter(News.headline == headline, News.news_date == parsed_date)
+        .first()
+    )
+
+    if not news_entity:
+        news_entity = News(
+            id_news=uuid4(),
+            headline=headline,
+            content="",  # Se llenará luego con el contenido real
+            news_date=parsed_date,
+        )
+        db.add(news_entity)
+        db.flush()  # para obtener id_news
+
+    # 2. Buscar análisis existente para esa noticia
+    analysis = (
+        db.query(Analysis)
+        .filter(Analysis.id_news == news_entity.id_news)
+        .first()
+    )
+
+    # 3. Obtener IDs de derechos solicitados
+    rights_requested = (
+        db.query(Right)
+        .filter(Right.right.in_(requested_right_names))
+        .all()
+    )
+
+    if not analysis:
+        # No hay análisis aún => todos los derechos están pendientes
+        return news_entity, None, rights_requested
+
+    # 4. Obtener derechos ya analizados
+    analyzed_right_ids = {
+        detail.id_right for detail in analysis.details
+    }
+
+    # 5. Determinar derechos faltantes
+    missing_rights = [
+        r for r in rights_requested if r.id_right not in analyzed_right_ids
+    ]
+
+    return news_entity, analysis, missing_rights
 
 def build_prompt(noticia: dict, fecha: str, derechos: List[str]) -> str:
     texto = noticia["contenido"]
@@ -79,3 +144,24 @@ def get_ollama_response(prompt: str):
     except Exception as e:
         print("❌ Error procesando respuesta:", e)
         return "[]"
+    
+def build_analysis_content_from_details(db: Session, analysis_id: str) -> str:
+    """
+    Reconstruye el JSON de content a partir de analysis_detail para un analysis dado.
+    """
+    details = (
+        db.query(AnalysisDetail)
+        .join(Right, Right.id_right == AnalysisDetail.id_right)
+        .filter(AnalysisDetail.id_analysis == analysis_id)
+        .all()
+    )
+
+    resultado = []
+    for d in details:
+        resultado.append({
+            "derecho": d.right.right,
+            "cantidad": d.count,
+            "lugares": json.loads(d.places) if d.places else []
+        })
+
+    return json.dumps(resultado, ensure_ascii=False)
