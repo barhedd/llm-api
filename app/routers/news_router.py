@@ -50,11 +50,55 @@ async def process_rights_ws(websocket: WebSocket, db: Session = Depends(get_db))
                     "message": f"La fecha '{f}' no tiene el formato válido YYYY-MM-DD."
                 })
                 return
+            
+        await websocket.send_json({"type": "status", "message": "Iniciando minado de noticias"})
+            
+        # 📌 Extraer datos de los PDFs
+        pdf_files = TextMiner.leer_pdf("newspaper")
+        await websocket.send_json({
+            "type": "progress",
+            "etapa": "Minado de noticias",
+            "message": "PDF leídos",
+            "progreso": 4
+        })
 
-        await websocket.send_json({"type": "status", "message": "Iniciando procesamiento de noticias"})
+        await websocket.send_json({"type": "status", "message": "Extrayendo texto de PDFs"})
+
+        text_extracted = TextMiner.extraer_texto_pdf(pdfs=pdf_files)
+        await websocket.send_json({
+            "type": "progress",
+            "etapa": "Minado de noticias",
+            "message": "Texto extraído de PDFs",
+            "progreso": 12
+        })
+
+        print("DEBUG text_extracted:", text_extracted)
+
+        await websocket.send_json({"type": "status", "message": "Separando y formateando noticias mediante IA"})
+
+        fecha = TextMiner.extraer_fecha_pdf(text_extracted[1])
+        news_separated = TextMiner.separar_noticias(text_extracted)
+        await websocket.send_json({
+            "type": "progress",
+            "etapa": "Minado de noticias",
+            "message": "Noticias separadas por IA",
+            "progreso": 25
+        })
+
+        json_output = TextMiner.formatear_json(fecha, news_separated)
+        news_filepath = FilesHelpers.save_news_in_json(json_output)
+        await websocket.send_json({
+            "type": "progress",
+            "etapa": "minado",
+            "message": "Noticias formateadas en JSON",
+            "progreso": 30
+        })
+
+        await websocket.send_json({"type": "status", "message": "Iniciando análisis de noticias"})
 
         resultados, noticias_ids = await NewsProcessorService.process_news_batch(
             db=db,
+            news_filepath=news_filepath,
             dates=fechas,
             rights=derechos,
             websocket=websocket
@@ -69,7 +113,7 @@ async def process_rights_ws(websocket: WebSocket, db: Session = Depends(get_db))
     except Exception as e:
         await websocket.send_json({
             "type": "error",
-            "message": f"❌ Error inesperado: {str(e)}"
+            "message": f"Error inesperado: {str(e)}"
         })
 
     finally:

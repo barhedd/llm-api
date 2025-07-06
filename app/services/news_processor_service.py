@@ -21,6 +21,7 @@ from typing import List, Tuple, Optional
 
 async def process_news_batch(
     db: Session,
+    news_filepath: str,
     dates: List[str],
     rights: List[str],
     websocket: Optional[WebSocket] = None
@@ -28,22 +29,22 @@ async def process_news_batch(
     resultados_por_fecha = defaultdict(lambda: defaultdict(lambda: {"cantidad": 0, "lugares": set()}))
     noticias_analizadas_ids: Set[str] = set()
 
-    # ✅ Obtener todas las noticias de todas las fechas
-    all_news = FilesHelpers.read_news_by_dates(dates)
+    all_news = FilesHelpers.read_news_by_dates(news_filepath, dates)
     total_news = len(all_news)
-    progress_actual = 0.0
-    progress_per_news = 100 / total_news
+    progress_actual = 30.0  # 🔸 Minado ya cubrió el 40%
+    progress_per_news = 70.0 / total_news  # Cada noticia aporta al 60% restante
 
-    async def enviar_progreso(etapa: str, progreso_global: float):
+    async def enviar_progreso(etapa: str, message: str, progreso_global: float):
         if websocket:
             await websocket.send_json({
                 "type": "progress",
                 "etapa": etapa,
+                "message": message,
                 "progreso": round(progreso_global, 2)
             })
 
     for idx, news_item in enumerate(all_news):
-        # Verificar si el cliente sigue conectado
+        # Verificar conexión del cliente
         try:
             await websocket.send_json({"type": "ping"})
         except WebSocketDisconnect:
@@ -59,20 +60,19 @@ async def process_news_batch(
         content = news_item["contenido"]
         fecha = news_item["fecha"]
 
-        # 1. Cargando titulares
+        # 1. Cargando titulares: 5%
         progress_local += progress_per_news * 0.05
-        await enviar_progreso("Procesamiento de noticias", progress_actual + progress_local)
+        await enviar_progreso("Análisis de noticias", "Cargando titulares", progress_actual + progress_local)
 
-        # 2. Determinar derechos faltantes
+        # 2. Determinar derechos faltantes: +15%
         news_entity, analysis, missing_rights = get_missing_rights_for_news(
             db=db,
             headline=headline,
             date=fecha,
             requested_right_names=rights
         )
-
         progress_local += progress_per_news * 0.15
-        await enviar_progreso("Procesamiento de noticias", progress_actual + progress_local)
+        await enviar_progreso("Análisis de noticias", "Determinando derechos faltantes", progress_actual + progress_local)
 
         if not missing_rights:
             if analysis and analysis.content:
@@ -89,8 +89,8 @@ async def process_news_batch(
                             "type": "error",
                             "message": f"Error al leer análisis previo para '{headline}': {str(e)}"
                         })
-            progress_actual += progress_per_news
-            await enviar_progreso("Procesamiento de noticias", progress_actual)
+            progress_actual += progress_per_news  # Completa el 100% del bloque si ya fue analizada
+            await enviar_progreso("Análisis de noticias", "Ya estaba analizada", progress_actual)
             continue
 
         if not news_entity.content:
@@ -106,25 +106,25 @@ async def process_news_batch(
             db.add(analysis)
             db.flush()
 
-        # 3. Fine tuning
+        # 3. Fine-tuning: +20%
         if websocket:
             await websocket.send_json({
                 "type": "status",
                 "message": f"Enviando a LLM: {headline[:60]}",
                 "fecha": fecha,
-                "noticial_actual": idx + 1,
+                "noticia_actual": idx + 1,
                 "total_noticias": total_news
             })
 
         FineTuneService.fine_tune_llm()
         progress_local += progress_per_news * 0.20
-        await enviar_progreso("Procesamiento de noticias", progress_actual + progress_local)
+        await enviar_progreso("Análisis de noticias", "Fine-tuning completado", progress_actual + progress_local)
 
-        # 4. Llamada al LLM
+        # 4. Llamada al modelo: +50%
         prompt = build_prompt(noticia=news_item, fecha=fecha, derechos=[r.right for r in missing_rights])
         response_json_str = await get_ollama_response_async(prompt)
         progress_local += progress_per_news * 0.50
-        await enviar_progreso("Procesamiento de noticias", progress_actual + progress_local)
+        await enviar_progreso("Análisis de noticias", "Respuesta del modelo recibida", progress_actual + progress_local)
 
         try:
             parsed_results = json.loads(response_json_str)
@@ -136,7 +136,7 @@ async def process_news_batch(
             if websocket:
                 await websocket.send_json({
                     "type": "error",
-                    "message": f"❌ Error al interpretar respuesta del LLM para '{headline}': {str(e)}"
+                    "message": f"Error al interpretar respuesta del LLM para '{headline}': {str(e)}"
                 })
             continue
 
@@ -156,10 +156,10 @@ async def process_news_batch(
         db.flush()
         analysis.content = build_analysis_content_from_details(db, analysis.id_analysis)
 
-        # 5. Guardando resultados
+        # 5. Guardado final: +10%
         progress_local += progress_per_news * 0.10
         progress_actual += progress_local
-        await enviar_progreso("Procesamiento de noticias", progress_actual)
+        await enviar_progreso("Análisis de noticias", "Análisis guardado", progress_actual)
 
     db.commit()
 
