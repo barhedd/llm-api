@@ -25,7 +25,7 @@ async def process_rights_ws(websocket: WebSocket, db: Session = Depends(get_db))
         fechas = payload.get("dates", [])
         derechos = payload.get("rights", [])
 
-        # 🔒 Validación de presencia y tipo
+        # Validación de presencia y tipo
         if not isinstance(fechas, list) or not fechas:
             await websocket.send_json({
                 "type": "error",
@@ -40,7 +40,7 @@ async def process_rights_ws(websocket: WebSocket, db: Session = Depends(get_db))
             })
             return
 
-        # 🔒 Validación de formato de fechas
+        # Validación de formato de fechas
         for f in fechas:
             try:
                 datetime.strptime(f, "%Y-%m-%d")
@@ -53,7 +53,7 @@ async def process_rights_ws(websocket: WebSocket, db: Session = Depends(get_db))
             
         await websocket.send_json({"type": "status", "message": "Iniciando minado de noticias"})
             
-        # 📌 Extraer datos de los PDFs
+        # Leer PDFs de la carpeta "newspaper"
         pdf_files = TextMiner.leer_pdf("newspaper")
         await websocket.send_json({
             "type": "progress",
@@ -64,6 +64,7 @@ async def process_rights_ws(websocket: WebSocket, db: Session = Depends(get_db))
 
         await websocket.send_json({"type": "status", "message": "Extrayendo texto de PDFs"})
 
+        # Extraer texto de los PDFs
         text_extracted = TextMiner.extraer_texto_pdf(pdfs=pdf_files)
         await websocket.send_json({
             "type": "progress",
@@ -75,8 +76,11 @@ async def process_rights_ws(websocket: WebSocket, db: Session = Depends(get_db))
         print("DEBUG text_extracted:", text_extracted)
 
         await websocket.send_json({"type": "status", "message": "Separando y formateando noticias mediante IA"})
-
+        
+        # Extraer fecha del primer elemento del texto extraído
         fecha = TextMiner.extraer_fecha_pdf(text_extracted[1])
+        
+        # Separar noticias utilizando IA
         news_separated = TextMiner.separar_noticias(text_extracted)
         await websocket.send_json({
             "type": "progress",
@@ -85,7 +89,10 @@ async def process_rights_ws(websocket: WebSocket, db: Session = Depends(get_db))
             "progreso": 25
         })
 
+        # Formatear noticias en JSON
         json_output = TextMiner.formatear_json(fecha, news_separated)
+
+        # Guardar noticias en un archivo JSON
         news_filepath = FilesHelpers.save_news_in_json(json_output)
         await websocket.send_json({
             "type": "progress",
@@ -94,6 +101,7 @@ async def process_rights_ws(websocket: WebSocket, db: Session = Depends(get_db))
             "progreso": 30
         })
 
+        # Ejecutar el análisis de noticias
         await websocket.send_json({"type": "status", "message": "Iniciando análisis de noticias"})
 
         resultados, noticias_ids = await NewsProcessorService.process_news_batch(
