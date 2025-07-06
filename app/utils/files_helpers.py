@@ -6,17 +6,22 @@ from typing import List, Dict, Any
 
 from app.core import config
 
-def read_news_by_date(date: str) -> List[str]:
+def read_news_by_dates(dates: List[str]) -> List[Dict[str, str]]:
     news = []
-    if not os.path.exists(config.NEWS_PATH):
+    if not os.path.exists(config.NEWS_JSON_FILE):
         return news
-    for file in os.listdir(config.NEWS_PATH):
-        if file.startswith(date):
-            path = os.path.join(config.NEWS_PATH, file)
-            with open(path, "r", encoding="utf-8") as f:
-                content = f.read().strip()
-                if content:
-                    news.append(content)
+
+    with open(config.NEWS_JSON_FILE, "r", encoding="utf-8") as f:
+        try:
+            all_news = json.load(f)
+        except json.JSONDecodeError:
+            print("❌ Error al cargar el JSON de noticias.")
+            return []
+
+    for noticia in all_news:
+        if noticia.get("fecha") in dates:
+            news.append(noticia)
+
     return news
 
 def read_news_from_json_by_date(date: str) -> List[Dict[str, str]]:

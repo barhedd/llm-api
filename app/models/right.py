@@ -11,8 +11,4 @@ class Right(Base):
     order = Column(Integer, nullable=False)
     visible = Column(Boolean, default=True)
     
-    analyses = relationship(
-        "Analysis",
-        secondary="analysis_right",
-        back_populates="rights"
-    )
+    details = relationship("AnalysisDetail", back_populates="right", cascade="all, delete-orphan")

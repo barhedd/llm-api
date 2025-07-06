@@ -139,6 +139,8 @@ Separa el texto en cada artículo informativo que presenta, la salida DEBE ser u
     "contenido": "Aquí va el contenido"\n
   }\n
 ]\n
+Debes seguir ESTRICTAMENTE el formato JSON, sin agregar ningún texto adicional. \n
+Cada artículo debe ser un objeto con las claves "titular" y "contenido". \n
 TODO debe ir en español. \n
 NO omitas texto. \n
 NO agregues explicaciones. \n
