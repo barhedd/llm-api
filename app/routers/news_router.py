@@ -8,10 +8,8 @@ from app.database import get_db
 from app.schemas.endpoints.news_details_schema import NewsDetailsRequest, NewsDetailsResponse
 from app.utils import files_helpers as FilesHelpers
 from app.services import news_processor_service as NewsProcessorService
-from app.services import fine_tune_service as FineTuneService
-from app.repositories import analysis_right_repository as AnalysisRightService
-from app.repositories import analysis_repository as AnalysisService
-from app.repositories import news_repository as NewsService
+from app.repositories import analysis_repository as AnalysisRepository
+from app.repositories import news_repository as NewsRepository
 from app.services import extract_news_service as TextMiner
 from app import models
 
@@ -26,8 +24,6 @@ async def process_rights_ws(websocket: WebSocket, db: Session = Depends(get_db))
 
         fechas = payload.get("dates", [])
         derechos = payload.get("rights", [])
-
-        FineTuneService.fine_tune_llm()
 
         # 🔒 Validación de presencia y tipo
         if not isinstance(fechas, list) or not fechas:
@@ -55,7 +51,7 @@ async def process_rights_ws(websocket: WebSocket, db: Session = Depends(get_db))
                 })
                 return
 
-        await websocket.send_json({"type": "status", "message": "🔍 Iniciando procesamiento..."})
+        await websocket.send_json({"type": "status", "message": "Iniciando procesamiento de noticias"})
 
         resultados, noticias_ids = await NewsProcessorService.process_news_batch(
             db=db,

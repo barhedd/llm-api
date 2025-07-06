@@ -1,10 +1,13 @@
-from collections import defaultdict
 import re
-from uuid import uuid4
-from fastapi import WebSocket, WebSocketDisconnect
 import httpx
 import json
+from uuid import uuid4
+from datetime import datetime
 from typing import List, Set
+from sqlalchemy.orm import Session
+from collections import defaultdict
+from fastapi import WebSocket, WebSocketDisconnect
+from app.services import fine_tune_service as FineTuneService
 from app.models.analysis import Analysis
 from app.models.analysis_detail import AnalysisDetail
 from app.models.news import News
@@ -14,9 +17,7 @@ from app.utils import ollama_helpers as OllamaHelpers
 from app.data import locations as Locations
 from app.core import config, prompts
 from app.utils import files_helpers as FilesHelpers
-from sqlalchemy.orm import Session
 from typing import List, Tuple, Optional
-from datetime import datetime
 
 async def process_news_batch(
     db: Session,
@@ -30,35 +31,39 @@ async def process_news_batch(
     # ✅ Obtener todas las noticias de todas las fechas
     all_news = FilesHelpers.read_news_by_dates(dates)
     total_news = len(all_news)
+    progress_actual = 0.0
+    progress_per_news = 100 / total_news
+
+    async def enviar_progreso(etapa: str, progreso_global: float):
+        if websocket:
+            await websocket.send_json({
+                "type": "progress",
+                "etapa": etapa,
+                "progreso": round(progreso_global, 2)
+            })
 
     for idx, news_item in enumerate(all_news):
-        # Verificar si el cliente está conectado antes de continuar
+        # Verificar si el cliente sigue conectado
         try:
             await websocket.send_json({"type": "ping"})
         except WebSocketDisconnect:
-            print("⚠️ Cliente cerró la conexión. Cancelando procesamiento.")
-                
-            # Retornar mensaje de error cuando el cliente se desconecta
             if websocket:
                 await websocket.send_json({
                     "type": "error",
                     "message": "El cliente ha cerrado la conexión. El procesamiento ha sido cancelado."
                 })
             return resultados_por_fecha, list(noticias_analizadas_ids)
-        
+
+        progress_local = 0.0
         headline = news_item["titular"]
         content = news_item["contenido"]
         fecha = news_item["fecha"]
 
-        # ✅ Progreso global
-        if websocket:
-            await websocket.send_json({
-                "type": "progress",
-                "noticia_actual": idx + 1,
-                "noticias_totales": total_news
-            })
+        # 1. Cargando titulares
+        progress_local += progress_per_news * 0.05
+        await enviar_progreso("Cargando titulares", progress_actual + progress_local)
 
-        # Paso 1: Determinar derechos faltantes
+        # 2. Determinar derechos faltantes
         news_entity, analysis, missing_rights = get_missing_rights_for_news(
             db=db,
             headline=headline,
@@ -66,7 +71,9 @@ async def process_news_batch(
             requested_right_names=rights
         )
 
-        # ✅ CASO: ya analizada
+        progress_local += progress_per_news * 0.15
+        await enviar_progreso("Determinando derechos", progress_actual + progress_local)
+
         if not missing_rights:
             if analysis and analysis.content:
                 try:
@@ -82,6 +89,8 @@ async def process_news_batch(
                             "type": "error",
                             "message": f"Error al leer análisis previo para '{headline}': {str(e)}"
                         })
+            progress_actual += progress_per_news
+            await enviar_progreso("Ya analizada previamente", progress_actual)
             continue
 
         if not news_entity.content:
@@ -97,7 +106,7 @@ async def process_news_batch(
             db.add(analysis)
             db.flush()
 
-        # Paso 2: Construir prompt y llamar al LLM
+        # 3. Fine tuning
         if websocket:
             await websocket.send_json({
                 "type": "status",
@@ -105,8 +114,15 @@ async def process_news_batch(
                 "fecha": fecha
             })
 
+        FineTuneService.fine_tune_llm()
+        progress_local += progress_per_news * 0.20
+        await enviar_progreso("Fine tuning", progress_actual + progress_local)
+
+        # 4. Llamada al LLM
         prompt = build_prompt(noticia=news_item, fecha=fecha, derechos=[r.right for r in missing_rights])
         response_json_str = await get_ollama_response_async(prompt)
+        progress_local += progress_per_news * 0.50
+        await enviar_progreso("Llamada a LLM", progress_actual + progress_local)
 
         try:
             parsed_results = json.loads(response_json_str)
@@ -122,7 +138,6 @@ async def process_news_batch(
                 })
             continue
 
-        # Paso 3: Guardar detalles
         for item in parsed_results:
             right_match = next((r for r in missing_rights if r.right == item["derecho"]), None)
             if not right_match:
@@ -139,9 +154,13 @@ async def process_news_batch(
         db.flush()
         analysis.content = build_analysis_content_from_details(db, analysis.id_analysis)
 
+        # 5. Guardando resultados
+        progress_local += progress_per_news * 0.10
+        progress_actual += progress_local
+        await enviar_progreso("Guardando resultados", progress_actual)
+
     db.commit()
 
-    # 🔁 Construcción final de resultados
     resultados_finales = []
     for fecha, derechos_dict in resultados_por_fecha.items():
         conteo = [

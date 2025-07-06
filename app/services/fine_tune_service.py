@@ -1,9 +1,8 @@
 import json
 import requests
-
-from app.utils import ollama_helpers as OllamaHelpers
-from app.core import config, prompts
 from string import Template
+from app.core import config, prompts
+from app.utils import ollama_helpers as OllamaHelpers
 
 def fine_tune_llm():
     prompt = prompts.FINE_TUNNING_PROMPT
@@ -12,6 +11,9 @@ def fine_tune_llm():
         prompt = prompt.safe_substitute()  # optionally pass variables inside substitute()
     else:
         prompt = str(prompt)
+
+    if not OllamaHelpers.verify_and_run_ollama():
+        return "[]"
 
     try:
         payload = {"model": config.MODEL_NAME, "prompt": prompt, "temperature": 0, "top_p": 1, "stop": ["\n\n"]}
