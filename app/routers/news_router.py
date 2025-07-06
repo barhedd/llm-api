@@ -1,16 +1,11 @@
-from collections import defaultdict
 import json
-from uuid import uuid4
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, WebSocket
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy import func
 from datetime import datetime
 from typing import List
 from app.database import get_db
-from app.models.analysis import Analysis
-from app.models.analysis_detail import AnalysisDetail
 from app.schemas.endpoints.news_details_schema import NewsDetailsRequest, NewsDetailsResponse
-from app.schemas.endpoints.process_news_schema import ProcessNewsRequest, ProcessNewsResponse, ProcessResult, RightCount
 from app.utils import files_helpers as FilesHelpers
 from app.services import news_processor_service as NewsProcessorService
 from app.repositories import analysis_right_repository as AnalysisRightService
@@ -18,135 +13,69 @@ from app.repositories import analysis_repository as AnalysisService
 from app.repositories import news_repository as NewsService
 from app.services import extract_news_service as TextMiner
 from app import models
-from collections import defaultdict
 
 router = APIRouter()
 
-@router.post("/process", response_model=ProcessNewsResponse)
-def process_rights(data: ProcessNewsRequest, db: Session = Depends(get_db)):
-    resultados_por_fecha = defaultdict(lambda: defaultdict(lambda: {"cantidad": 0, "lugares": set()}))
-    noticias_analizadas_ids = set()
+@router.websocket("/ws/process")
+async def process_rights_ws(websocket: WebSocket, db: Session = Depends(get_db)):
+    await websocket.accept()
 
-    for date in data.dates:
-        news_list = FilesHelpers.read_news_from_json_by_date(date)
+    try:
+        payload = await websocket.receive_json()
 
-        for news_item in news_list:
-            headline = news_item["titular"]
-            content = news_item["contenido"]
-            fecha = news_item["fecha"]
+        fechas = payload.get("dates", [])
+        derechos = payload.get("rights", [])
 
-            # Paso 1: Determinar si hay derechos faltantes
-            news_entity, analysis, missing_rights = NewsProcessorService.get_missing_rights_for_news(
-                db=db,
-                headline=headline,
-                date=fecha,
-                requested_right_names=data.rights
-            )
+        # 🔒 Validación de presencia y tipo
+        if not isinstance(fechas, list) or not fechas:
+            await websocket.send_json({
+                "type": "error",
+                "message": "El campo 'dates' es obligatorio y debe ser una lista no vacía."
+            })
+            return
 
-            # CASO: ya fueron analizados todos los derechos solicitados
-            if not missing_rights:
-                print(f"ℹ️ Todos los derechos ya fueron analizados para: {headline}")
+        if not isinstance(derechos, list) or not derechos:
+            await websocket.send_json({
+                "type": "error",
+                "message": "El campo 'rights' es obligatorio y debe ser una lista no vacía."
+            })
+            return
 
-                if analysis and analysis.content:
-                    try:
-                        existing_results = json.loads(analysis.content)
-                        for item in existing_results:
-                            if item["derecho"] in data.rights:
-                                resultados_por_fecha[fecha][item["derecho"]]["cantidad"] += item["cantidad"]
-                                resultados_por_fecha[fecha][item["derecho"]]["lugares"].update(item["lugares"])
-                        noticias_analizadas_ids.add(str(news_entity.id_news))
-                    except Exception as e:
-                        print(f"⚠️ Error al procesar análisis existente para: {headline}: {e}")
-                continue
-
-            # Paso 2: Establecer contenido si es nuevo
-            if not news_entity.content:
-                news_entity.content = content
-
-            # Paso 3: Crear Analysis si no existe
-            if not analysis:
-                analysis = Analysis(
-                    id_analysis=uuid4(),
-                    content="[]",  # se actualizará más adelante
-                    analysis_date=datetime.now(),
-                    id_news=news_entity.id_news
-                )
-                db.add(analysis)
-                db.flush()
-
-            # Paso 4: Construir prompt y llamar al LLM
-            prompt = NewsProcessorService.build_prompt(
-                noticia=news_item,
-                fecha=fecha,
-                derechos=[r.right for r in missing_rights]
-            )
-
-            response_json_str = NewsProcessorService.get_ollama_response(prompt)
-
+        # 🔒 Validación de formato de fechas
+        for f in fechas:
             try:
-                parsed_results = json.loads(response_json_str)
+                datetime.strptime(f, "%Y-%m-%d")
+            except ValueError:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": f"La fecha '{f}' no tiene el formato válido YYYY-MM-DD."
+                })
+                return
 
-                # Agregar a resultados agrupados por fecha
-                for item in parsed_results:
-                    derecho = item["derecho"]
-                    cantidad = item["cantidad"]
-                    lugares = item["lugares"]
+        await websocket.send_json({"type": "status", "message": "🔍 Iniciando procesamiento..."})
 
-                    resultados_por_fecha[fecha][derecho]["cantidad"] += cantidad
-                    resultados_por_fecha[fecha][derecho]["lugares"].update(lugares)
+        resultados, noticias_ids = await NewsProcessorService.process_news_batch(
+            db=db,
+            dates=fechas,
+            rights=derechos,
+            websocket=websocket
+        )
 
-                noticias_analizadas_ids.add(str(news_entity.id_news))
-            except Exception as e:
-                print(f"❌ No se pudo decodificar la respuesta JSON para: {headline}")
-                continue
+        await websocket.send_json({
+            "type": "result",
+            "resultados": [r.dict() for r in resultados],
+            "noticias": noticias_ids
+        })
 
-            # Paso 5: Guardar detalles del análisis
-            for item in parsed_results:
-                right_match = next((r for r in missing_rights if r.right == item["derecho"]), None)
-                if not right_match:
-                    print(f"⚠️ Derecho inesperado devuelto por LLM: {item['derecho']}")
-                    continue
+    except Exception as e:
+        await websocket.send_json({
+            "type": "error",
+            "message": f"❌ Error inesperado: {str(e)}"
+        })
 
-                detail = AnalysisDetail(
-                    id_detail=uuid4(),
-                    id_analysis=analysis.id_analysis,
-                    id_right=right_match.id_right,
-                    count=item["cantidad"],
-                    places=json.dumps(item["lugares"], ensure_ascii=False)
-                )
-                db.add(detail)
+    finally:
+        await websocket.close()
 
-            db.flush()  # Asegura que los detalles estén visibles para la consulta siguiente
-
-            # Paso 6: Reconstruir content desde analysis_detail
-            content_json = NewsProcessorService.build_analysis_content_from_details(db, analysis.id_analysis)
-            print("🔍 Nuevo contenido para analysis.content:\n", content_json)
-            analysis.content = content_json
-
-    db.commit()  # aplica todos los cambios
-
-    # Paso 7: Formatear los datos al modelo de respuesta
-    response_data = []
-
-    for fecha, derechos_dict in resultados_por_fecha.items():
-        conteo = [
-            RightCount(
-                derecho=derecho,
-                cantidad=detalle["cantidad"],
-                lugares=sorted(list(detalle["lugares"]))
-            )
-            for derecho, detalle in derechos_dict.items()
-        ]
-
-        response_data.append(ProcessResult(
-            fecha=fecha,
-            conteo=conteo
-        ))
-
-    return ProcessNewsResponse(
-        resultados=response_data,
-        noticias=list(noticias_analizadas_ids)
-    )
 
 @router.post("/details", response_model=List[NewsDetailsResponse])
 def obtener_detalle_noticias(payload: NewsDetailsRequest, db: Session = Depends(get_db)):
