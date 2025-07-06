@@ -61,7 +61,7 @@ async def process_news_batch(
 
         # 1. Cargando titulares
         progress_local += progress_per_news * 0.05
-        await enviar_progreso("Cargando titulares", progress_actual + progress_local)
+        await enviar_progreso("Procesamiento de noticias", progress_actual + progress_local)
 
         # 2. Determinar derechos faltantes
         news_entity, analysis, missing_rights = get_missing_rights_for_news(
@@ -72,7 +72,7 @@ async def process_news_batch(
         )
 
         progress_local += progress_per_news * 0.15
-        await enviar_progreso("Determinando derechos", progress_actual + progress_local)
+        await enviar_progreso("Procesamiento de noticias", progress_actual + progress_local)
 
         if not missing_rights:
             if analysis and analysis.content:
@@ -90,7 +90,7 @@ async def process_news_batch(
                             "message": f"Error al leer análisis previo para '{headline}': {str(e)}"
                         })
             progress_actual += progress_per_news
-            await enviar_progreso("Ya analizada previamente", progress_actual)
+            await enviar_progreso("Procesamiento de noticias", progress_actual)
             continue
 
         if not news_entity.content:
@@ -111,18 +111,20 @@ async def process_news_batch(
             await websocket.send_json({
                 "type": "status",
                 "message": f"Enviando a LLM: {headline[:60]}",
-                "fecha": fecha
+                "fecha": fecha,
+                "noticial_actual": idx + 1,
+                "total_noticias": total_news
             })
 
         FineTuneService.fine_tune_llm()
         progress_local += progress_per_news * 0.20
-        await enviar_progreso("Fine tuning", progress_actual + progress_local)
+        await enviar_progreso("Procesamiento de noticias", progress_actual + progress_local)
 
         # 4. Llamada al LLM
         prompt = build_prompt(noticia=news_item, fecha=fecha, derechos=[r.right for r in missing_rights])
         response_json_str = await get_ollama_response_async(prompt)
         progress_local += progress_per_news * 0.50
-        await enviar_progreso("Llamada a LLM", progress_actual + progress_local)
+        await enviar_progreso("Procesamiento de noticias", progress_actual + progress_local)
 
         try:
             parsed_results = json.loads(response_json_str)
@@ -157,7 +159,7 @@ async def process_news_batch(
         # 5. Guardando resultados
         progress_local += progress_per_news * 0.10
         progress_actual += progress_local
-        await enviar_progreso("Guardando resultados", progress_actual)
+        await enviar_progreso("Procesamiento de noticias", progress_actual)
 
     db.commit()
 
