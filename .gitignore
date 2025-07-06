@@ -46,5 +46,6 @@ coverage.xml
 
 # Dependencias de FastAPI y otros módulos (para evitar subir directorios como "node_modules" si utilizas frontend)
 node_modules/
-newspaper/*
-resultados/*
+newspaper/
+resultados/
+logs/
