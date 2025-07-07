@@ -74,21 +74,23 @@ async def process_news_batch(
         progress_local += progress_per_news * 0.15
         await enviar_progreso("Análisis de noticias", "Determinando derechos faltantes", progress_actual + progress_local)
 
+        if analysis and analysis.content:
+            try:
+                existing_results = json.loads(analysis.content)
+                for item in existing_results:
+                    if item["derecho"] in rights:
+                        resultados_por_fecha[fecha][item["derecho"]]["cantidad"] += item["cantidad"]
+                        resultados_por_fecha[fecha][item["derecho"]]["lugares"].update(item["lugares"])
+                noticias_analizadas_ids.add(str(news_entity.id_news))
+            except Exception as e:
+                if websocket:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": f"Error al leer análisis previo para '{headline}': {str(e)}"
+                    })
+
+        # ✅ Si ya no hay derechos faltantes, no analizamos más, pero igual enviamos el resultado
         if not missing_rights:
-            if analysis and analysis.content:
-                try:
-                    existing_results = json.loads(analysis.content)
-                    for item in existing_results:
-                        if item["derecho"] in rights:
-                            resultados_por_fecha[fecha][item["derecho"]]["cantidad"] += item["cantidad"]
-                            resultados_por_fecha[fecha][item["derecho"]]["lugares"].update(item["lugares"])
-                    noticias_analizadas_ids.add(str(news_entity.id_news))
-                except Exception as e:
-                    if websocket:
-                        await websocket.send_json({
-                            "type": "error",
-                            "message": f"Error al leer análisis previo para '{headline}': {str(e)}"
-                        })
             progress_actual += progress_per_news  # Completa el 100% del bloque si ya fue analizada
             await enviar_progreso("Análisis de noticias", "Ya estaba analizada", progress_actual)
             continue
