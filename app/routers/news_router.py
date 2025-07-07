@@ -58,60 +58,60 @@ async def process_rights_ws(websocket: WebSocket, db: Session = Depends(get_db))
             
         await websocket.send_json({"type": "status", "message": "Iniciando minado de noticias"})
             
-        # # Leer PDFs de la carpeta "newspaper"
-        # pdf_files = TextMiner.leer_pdf("newspaper")
-        # await websocket.send_json({
-        #     "type": "progress",
-        #     "etapa": "Minado de noticias",
-        #     "message": "PDF leídos",
-        #     "progreso": 4
-        # })
+        # Leer PDFs de la carpeta "newspaper"
+        pdf_files = TextMiner.leer_pdf("newspaper")
+        await websocket.send_json({
+            "type": "progress",
+            "etapa": "Minado de noticias",
+            "message": "PDF leídos",
+            "progreso": 4
+        })
 
-        # await websocket.send_json({"type": "status", "message": "Extrayendo texto de PDFs"})
+        await websocket.send_json({"type": "status", "message": "Extrayendo texto de PDFs"})
 
-        # # Extraer texto de los PDFs
-        # text_extracted = TextMiner.extraer_texto_pdf(pdfs=pdf_files)
-        # await websocket.send_json({
-        #     "type": "progress",
-        #     "etapa": "Minado de noticias",
-        #     "message": "Texto extraído de PDFs",
-        #     "progreso": 12
-        # })
+        # Extraer texto de los PDFs
+        text_extracted = TextMiner.extraer_texto_pdf(pdfs=pdf_files)
+        await websocket.send_json({
+            "type": "progress",
+            "etapa": "Minado de noticias",
+            "message": "Texto extraído de PDFs",
+            "progreso": 12
+        })
 
-        # print("DEBUG text_extracted:", text_extracted)
+        print("DEBUG text_extracted:", text_extracted)
 
-        # await websocket.send_json({"type": "status", "message": "Separando y formateando noticias mediante IA"})
+        await websocket.send_json({"type": "status", "message": "Separando y formateando noticias mediante IA"})
         
-        # # Extraer fecha del primer elemento del texto extraído
-        # fecha = TextMiner.extraer_fecha_pdf(text_extracted[1])
+        # Extraer fecha del primer elemento del texto extraído
+        fecha = TextMiner.extraer_fecha_pdf(text_extracted[1])
         
-        # # Separar noticias utilizando IA
-        # news_separated = TextMiner.separar_noticias(text_extracted)
-        # await websocket.send_json({
-        #     "type": "progress",
-        #     "etapa": "Minado de noticias",
-        #     "message": "Noticias separadas por IA",
-        #     "progreso": 25
-        # })
+        # Separar noticias utilizando IA
+        news_separated = TextMiner.separar_noticias(text_extracted)
+        await websocket.send_json({
+            "type": "progress",
+            "etapa": "Minado de noticias",
+            "message": "Noticias separadas por IA",
+            "progreso": 25
+        })
 
-        # # Formatear noticias en JSON
-        # json_output = TextMiner.formatear_json(fecha, news_separated)
+        # Formatear noticias en JSON
+        json_output = TextMiner.formatear_json(fecha, news_separated)
 
-        # # Guardar noticias en un archivo JSON
-        # news_filepath = FilesHelpers.save_news_in_json(json_output)
-        # await websocket.send_json({
-        #     "type": "progress",
-        #     "etapa": "minado",
-        #     "message": "Noticias formateadas en JSON",
-        #     "progreso": 30
-        # })
+        # Guardar noticias en un archivo JSON
+        news_filepath = FilesHelpers.save_news_in_json(json_output)
+        await websocket.send_json({
+            "type": "progress",
+            "etapa": "minado",
+            "message": "Noticias formateadas en JSON",
+            "progreso": 30
+        })
 
         # Ejecutar el análisis de noticias
         await websocket.send_json({"type": "status", "message": "Iniciando análisis de noticias"})
 
         resultados, noticias_ids = await NewsProcessorService.process_news_batch(
             db=db,
-            news_filepath="resultados/news.json",
+            news_filepath=news_filepath,
             dates=dates_rango,
             rights=derechos,
             websocket=websocket
