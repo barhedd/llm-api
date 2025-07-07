@@ -31,8 +31,8 @@ async def process_news_batch(
 
     all_news = FilesHelpers.read_news_by_dates(news_filepath, dates)
     total_news = len(all_news)
-    progress_actual = 30.0  # 🔸 Minado ya cubrió el 40%
-    progress_per_news = 70.0 / total_news  # Cada noticia aporta al 60% restante
+    progress_actual = 30.0  # Minado ya cubrió el 30%
+    progress_per_news = 70.0 / total_news  # Cada noticia aporta al 70% restante
 
     async def enviar_progreso(etapa: str, message: str, progreso_global: float):
         if websocket:
@@ -163,16 +163,18 @@ async def process_news_batch(
 
     db.commit()
 
+    # Asegurar que todas las fechas estén presentes
     resultados_finales = []
-    for fecha, derechos_dict in resultados_por_fecha.items():
-        conteo = [
-            RightCount(
+    for fecha in dates:
+        derechos_dict = resultados_por_fecha.get(fecha, {})
+        conteo = []
+        for derecho in rights:
+            detalle = derechos_dict.get(derecho, {"cantidad": 0, "lugares": set()})
+            conteo.append(RightCount(
                 derecho=derecho,
                 cantidad=detalle["cantidad"],
                 lugares=sorted(list(detalle["lugares"]))
-            )
-            for derecho, detalle in derechos_dict.items()
-        ]
+            ))
         resultados_finales.append(ProcessResult(fecha=fecha, conteo=conteo))
 
     if websocket:
