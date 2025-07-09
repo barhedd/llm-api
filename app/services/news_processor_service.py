@@ -30,6 +30,17 @@ async def process_news_batch(
     noticias_analizadas_ids: Set[str] = set()
 
     all_news = FilesHelpers.read_news_by_dates(news_filepath, dates)
+
+    # ⛔ Validación: si no hay noticias, detener el procesamiento
+    if not all_news:
+        if websocket:
+            await websocket.send_json({
+                "type": "error",
+                "message": "No se encontraron noticias para las fechas indicadas."
+            })
+            await websocket.close()
+        return [], []
+
     total_news = len(all_news)
     progress_actual = 30.0  # Minado ya cubrió el 30%
     progress_per_news = 70.0 / total_news  # Cada noticia aporta al 70% restante
