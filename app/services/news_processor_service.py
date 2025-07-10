@@ -31,15 +31,23 @@ async def process_news_batch(
 
     all_news = FilesHelpers.read_news_by_dates(news_filepath, dates)
 
-    # ⛔ Validación: si no hay noticias, detener el procesamiento
+    # ⛔ Validación: si no hay noticias, enviar resultados vacíos por fecha y derecho
     if not all_news:
+        resultados_finales = []
+        for fecha in dates:
+            conteo = [
+                RightCount(derecho=derecho, cantidad=0, lugares=[])
+                for derecho in rights
+            ]
+            resultados_finales.append(ProcessResult(fecha=fecha, conteo=conteo))
+
         if websocket:
             await websocket.send_json({
-                "type": "error",
-                "message": "No se encontraron noticias para las fechas indicadas."
+                "type": "warning",
+                "message": "No se encontraron noticias para ninguna de las fechas indicadas."
             })
-            await websocket.close()
-        return [], []
+
+        return resultados_finales, []
 
     total_news = len(all_news)
     progress_actual = 30.0  # Minado ya cubrió el 30%
@@ -189,13 +197,6 @@ async def process_news_batch(
                 lugares=sorted(list(detalle["lugares"]))
             ))
         resultados_finales.append(ProcessResult(fecha=fecha, conteo=conteo))
-
-    if websocket:
-        await websocket.send_json({
-            "type": "result",
-            "resultados": [r.dict() for r in resultados_finales],
-            "noticias": list(noticias_analizadas_ids)
-        })
 
     return resultados_finales, list(noticias_analizadas_ids)
 
