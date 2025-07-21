@@ -1,12 +1,263 @@
 import re
-import requests
+import httpx
 import json
-from typing import List
+from uuid import uuid4
+from datetime import datetime
+from typing import List, Set
+from sqlalchemy.orm import Session
 from collections import defaultdict
-
+from fastapi import WebSocket, WebSocketDisconnect
+from app.services import fine_tune_service as FineTuneService
+from app.models.analysis import Analysis
+from app.models.analysis_detail import AnalysisDetail
+from app.models.news import News
+from app.models.right import Right
+from app.schemas.endpoints.process_news_schema import ProcessResult, RightCount
 from app.utils import ollama_helpers as OllamaHelpers
 from app.data import locations as Locations
 from app.core import config, prompts
+from app.utils import files_helpers as FilesHelpers
+from typing import List, Tuple, Optional
+
+async def process_news_batch(
+    db: Session,
+    news_filepath: str,
+    dates: List[str],
+    rights: List[str],
+    websocket: Optional[WebSocket] = None
+) -> Tuple[List[ProcessResult], List[str]]:
+    resultados_por_fecha = defaultdict(lambda: defaultdict(lambda: {"cantidad": 0, "lugares": set()}))
+    noticias_analizadas_ids: Set[str] = set()
+
+    all_news = FilesHelpers.read_news_by_dates(news_filepath, dates)
+
+    # ⛔ Validación: si no hay noticias, enviar resultados vacíos por fecha y derecho
+    if not all_news:
+        resultados_finales = []
+        for fecha in dates:
+            conteo = [
+                RightCount(derecho=derecho, cantidad=0, lugares=[])
+                for derecho in rights
+            ]
+            resultados_finales.append(ProcessResult(fecha=fecha, conteo=conteo))
+
+        if websocket:
+            await websocket.send_json({
+                "type": "warning",
+                "message": "No se encontraron noticias para ninguna de las fechas indicadas."
+            })
+
+        return resultados_finales, []
+
+    total_news = len(all_news)
+    progress_actual = 30.0  # Minado ya cubrió el 30%
+    progress_per_news = 70.0 / total_news  # Cada noticia aporta al 70% restante
+
+    async def enviar_progreso(etapa: str, message: str, progreso_global: float):
+        if websocket:
+            await websocket.send_json({
+                "type": "progress",
+                "etapa": etapa,
+                "message": message,
+                "progreso": round(progreso_global, 2)
+            })
+
+    for idx, news_item in enumerate(all_news):
+        # Verificar conexión del cliente
+        try:
+            await websocket.send_json({"type": "ping"})
+        except WebSocketDisconnect:
+            if websocket:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "El cliente ha cerrado la conexión. El procesamiento ha sido cancelado."
+                })
+            return resultados_por_fecha, list(noticias_analizadas_ids)
+
+        progress_local = 0.0
+        headline = news_item["titular"]
+        content = news_item["contenido"]
+        fecha = news_item["fecha"]
+
+        # 1. Cargando titulares: 5%
+        progress_local += progress_per_news * 0.05
+        await enviar_progreso("Análisis de noticias", "Cargando titulares", progress_actual + progress_local)
+
+        # 2. Determinar derechos faltantes: +15%
+        news_entity, analysis, missing_rights = get_missing_rights_for_news(
+            db=db,
+            headline=headline,
+            date=fecha,
+            requested_right_names=rights
+        )
+        progress_local += progress_per_news * 0.15
+        await enviar_progreso("Análisis de noticias", "Determinando derechos faltantes", progress_actual + progress_local)
+
+        if analysis and analysis.content:
+            try:
+                existing_results = json.loads(analysis.content)
+                for item in existing_results:
+                    if item["derecho"] in rights:
+                        resultados_por_fecha[fecha][item["derecho"]]["cantidad"] += item["cantidad"]
+                        resultados_por_fecha[fecha][item["derecho"]]["lugares"].update(item["lugares"])
+                noticias_analizadas_ids.add(str(news_entity.id_news))
+            except Exception as e:
+                if websocket:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": f"Error al leer análisis previo para '{headline}': {str(e)}"
+                    })
+
+        # ✅ Si ya no hay derechos faltantes, no analizamos más, pero igual enviamos el resultado
+        if not missing_rights:
+            progress_actual += progress_per_news  # Completa el 100% del bloque si ya fue analizada
+            await enviar_progreso("Análisis de noticias", "Ya estaba analizada", progress_actual)
+            continue
+
+        if not news_entity.content:
+            news_entity.content = content
+
+        if not analysis:
+            analysis = Analysis(
+                id_analysis=uuid4(),
+                content="[]",
+                analysis_date=datetime.now(),
+                id_news=news_entity.id_news
+            )
+            db.add(analysis)
+            db.flush()
+
+        # 3. Fine-tuning: +20%
+        if websocket:
+            await websocket.send_json({
+                "type": "status",
+                "message": f"Enviando a LLM: {headline[:60]}",
+                "fecha": fecha,
+                "noticia_actual": idx + 1,
+                "total_noticias": total_news
+            })
+
+        FineTuneService.fine_tune_llm()
+        progress_local += progress_per_news * 0.20
+        await enviar_progreso("Análisis de noticias", "Fine-tuning completado", progress_actual + progress_local)
+
+        # 4. Llamada al modelo: +50%
+        prompt = build_prompt(noticia=news_item, fecha=fecha, derechos=[r.right for r in missing_rights])
+        response_json_str = await get_ollama_response_async(prompt)
+        progress_local += progress_per_news * 0.50
+        await enviar_progreso("Análisis de noticias", "Respuesta del modelo recibida", progress_actual + progress_local)
+
+        try:
+            parsed_results = json.loads(response_json_str)
+            for item in parsed_results:
+                resultados_por_fecha[fecha][item["derecho"]]["cantidad"] += item["cantidad"]
+                resultados_por_fecha[fecha][item["derecho"]]["lugares"].update(item["lugares"])
+            noticias_analizadas_ids.add(str(news_entity.id_news))
+        except Exception as e:
+            if websocket:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": f"Error al interpretar respuesta del LLM para '{headline}': {str(e)}"
+                })
+            continue
+
+        for item in parsed_results:
+            right_match = next((r for r in missing_rights if r.right == item["derecho"]), None)
+            if not right_match:
+                continue
+            detail = AnalysisDetail(
+                id_detail=uuid4(),
+                id_analysis=analysis.id_analysis,
+                id_right=right_match.id_right,
+                count=item["cantidad"],
+                places=json.dumps(item["lugares"], ensure_ascii=False)
+            )
+            db.add(detail)
+
+        db.flush()
+        analysis.content = build_analysis_content_from_details(db, analysis.id_analysis)
+
+        # 5. Guardado final: +10%
+        progress_local += progress_per_news * 0.10
+        progress_actual += progress_local
+        await enviar_progreso("Análisis de noticias", "Análisis guardado", progress_actual)
+
+    db.commit()
+
+    # Asegurar que todas las fechas estén presentes
+    resultados_finales = []
+    for fecha in dates:
+        derechos_dict = resultados_por_fecha.get(fecha, {})
+        conteo = []
+        for derecho in rights:
+            detalle = derechos_dict.get(derecho, {"cantidad": 0, "lugares": set()})
+            conteo.append(RightCount(
+                derecho=derecho,
+                cantidad=detalle["cantidad"],
+                lugares=sorted(list(detalle["lugares"]))
+            ))
+        resultados_finales.append(ProcessResult(fecha=fecha, conteo=conteo))
+
+    return resultados_finales, list(noticias_analizadas_ids)
+
+def get_missing_rights_for_news(
+    db: Session,
+    headline: str,
+    date: str,
+    requested_right_names: List[str]
+) -> Tuple[Optional[News], Optional[Analysis], List[Right]]:
+    """
+    Verifica qué derechos aún no han sido analizados para una noticia dada.
+    Retorna la noticia (creada o existente), el análisis (creado o existente) y los derechos faltantes.
+    """
+    parsed_date = datetime.strptime(date, "%Y-%m-%d")
+
+    # 1. Buscar o crear la noticia
+    news_entity = (
+        db.query(News)
+        .filter(News.headline == headline, News.news_date == parsed_date)
+        .first()
+    )
+
+    if not news_entity:
+        news_entity = News(
+            id_news=uuid4(),
+            headline=headline,
+            content="",  # Se llenará luego con el contenido real
+            news_date=parsed_date,
+        )
+        db.add(news_entity)
+        db.flush()  # para obtener id_news
+
+    # 2. Buscar análisis existente para esa noticia
+    analysis = (
+        db.query(Analysis)
+        .filter(Analysis.id_news == news_entity.id_news)
+        .first()
+    )
+
+    # 3. Obtener IDs de derechos solicitados
+    rights_requested = (
+        db.query(Right)
+        .filter(Right.right.in_(requested_right_names))
+        .all()
+    )
+
+    if not analysis:
+        # No hay análisis aún => todos los derechos están pendientes
+        return news_entity, None, rights_requested
+
+    # 4. Obtener derechos ya analizados
+    analyzed_right_ids = {
+        detail.id_right for detail in analysis.details
+    }
+
+    # 5. Determinar derechos faltantes
+    missing_rights = [
+        r for r in rights_requested if r.id_right not in analyzed_right_ids
+    ]
+
+    return news_entity, analysis, missing_rights
 
 def build_prompt(noticia: dict, fecha: str, derechos: List[str]) -> str:
     texto = noticia["contenido"]
@@ -34,20 +285,28 @@ def get_candidates_locations(noticia: str) -> List[str]:
 
     return coincidencias
 
-def get_ollama_response(prompt: str):
+async def get_ollama_response_async(prompt: str) -> str:
     if not OllamaHelpers.verify_and_run_ollama():
         return "[]"
-    
-    payload = {"model": config.MODEL_NAME, "prompt": prompt, "temperature": 0, "top_p": 1, "stop": ["\n\n"]}
-    response = requests.post(config.OLLAMA_API_URL, json=payload)
 
-    print("\n📤 Respuesta cruda del LLM:\n", response.text, "\n")
-
-    if not response.text.strip():
-        print("❌ La respuesta del LLM está vacía.")
-        return "[]"
+    payload = {
+        "model": config.MODEL_NAME,
+        "prompt": prompt,
+        "temperature": 0,
+        "top_p": 1,
+        "stop": ["\n\n"]
+    }
 
     try:
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            response = await client.post(config.OLLAMA_API_URL, json=payload)
+
+        print("\n📤 Respuesta cruda del LLM:\n", response.text, "\n")
+
+        if not response.text.strip():
+            print("❌ La respuesta del LLM está vacía.")
+            return "[]"
+
         lines = response.text.strip().split("\n")
         responses = [json.loads(line)["response"] for line in lines if line.strip()]
         respuesta_final = "".join(responses).strip()
@@ -73,9 +332,34 @@ def get_ollama_response(prompt: str):
             isinstance(item["lugares"], list)
             for item in parsed):
             return json.dumps(parsed, ensure_ascii=False)
-        else: 
+        else:
             print("⚠️ El JSON no tiene la estructura esperada.")
             return "[]"
+
+    except httpx.RequestError as e:
+        print(f"❌ Error de red al consultar Ollama: {e}")
+        return "[]"
     except Exception as e:
         print("❌ Error procesando respuesta:", e)
         return "[]"
+    
+def build_analysis_content_from_details(db: Session, analysis_id: str) -> str:
+    """
+    Reconstruye el JSON de content a partir de analysis_detail para un analysis dado.
+    """
+    details = (
+        db.query(AnalysisDetail)
+        .join(Right, Right.id_right == AnalysisDetail.id_right)
+        .filter(AnalysisDetail.id_analysis == analysis_id)
+        .all()
+    )
+
+    resultado = []
+    for d in details:
+        resultado.append({
+            "derecho": d.right.right,
+            "cantidad": d.count,
+            "lugares": json.loads(d.places) if d.places else []
+        })
+
+    return json.dumps(resultado, ensure_ascii=False)

@@ -139,6 +139,8 @@ Separa el texto en cada artículo informativo que presenta, la salida DEBE ser u
     "contenido": "Aquí va el contenido"\n
   }\n
 ]\n
+Debes seguir ESTRICTAMENTE el formato JSON, sin agregar ningún texto adicional. \n
+Cada artículo debe ser un objeto con las claves "titular" y "contenido". \n
 TODO debe ir en español. \n
 NO omitas texto. \n
 NO agregues explicaciones. \n
@@ -194,25 +196,3 @@ def formatear_json(strdate: str, json_news: List[str]) -> List[Dict[str, Any]]:
     logger.info(f"Noticias en formato JSON completas:\n{parsed_news}")
     logger.info("************************FORMATEO JSON FINALIZADO************************")
     return parsed_news
-
-def procesar_derechos(folder_name : str):
-    
-    pdf_files = leer_pdf(folder_name)
-
-
-
-    text_extracted = extraer_texto_pdf(pdfs=pdf_files)
-    fecha = extraer_fecha_pdf(text_extracted[0])
-    news_separated = separar_noticias(text_extracted)
-    json_output = formatear_json(fecha, news_separated)
-
-    timestamp = datetime.now().strftime("%Y-%m-%d")
-    filename = f"noticias.json-{timestamp}.json"
-    os.makedirs("resultados", exist_ok=True)
-    filepath = os.path.join("resultados", filename)
-
-    with open(filename, "w", encoding="utf-8") as file:
-        json.dump(json_output, filepath, ensure_ascii=False, indent=2)
-
-
-

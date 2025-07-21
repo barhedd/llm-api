@@ -1,190 +1,181 @@
 import json
-from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, WebSocket
+from sqlalchemy.orm import Session, aliased
+from sqlalchemy import func
 from datetime import datetime
 from typing import List
-
-# NUEVAS IMPORTACIONES
 from app.database import get_db
-from app.schemas.endpoints.news_details_schema import NewsDetailsResponse, NewsIdsRequest
-from app.schemas.endpoints.process_news_schema import ProcessNewsRequest, ProcessNewsResponse, ProcessResult, RightCount
+from app.schemas.endpoints.news_details_schema import NewsDetailsRequest, NewsDetailsResponse
 from app.utils import files_helpers as FilesHelpers
 from app.services import news_processor_service as NewsProcessorService
-from app.repositories import analysis_right_repository as AnalysisRightService
-from app.repositories import analysis_repository as AnalysisService
-from app.repositories import news_repository as NewsService
+from app.repositories import analysis_repository as AnalysisRepository
+from app.repositories import news_repository as NewsRepository
 from app.services import extract_news_service as TextMiner
-from app import models
+from app.utils import date_helpers as DateHelpers
+from app.models import analysis as AnalysisModel
+from app.models import news as NewsModel
 
 router = APIRouter()
 
-@router.post("/process", response_model=ProcessNewsResponse)
-def process_rights(data: ProcessNewsRequest, db: Session = Depends(get_db)):
-    all_results = []
-    all_news_id = []
+@router.websocket("/ws/process")
+async def process_rights_ws(websocket: WebSocket, db: Session = Depends(get_db)):
+    await websocket.accept()
 
-    pdf_files = TextMiner.leer_pdf("newspaper")
-    text_extracted = TextMiner.extraer_texto_pdf(pdfs=pdf_files)
+    try:
+        payload = await websocket.receive_json()
 
-    print("DEBUG text_extracted:", text_extracted)
+        fechas = payload.get("dates", [])
+        derechos = payload.get("rights", [])
 
-    fecha = TextMiner.extraer_fecha_pdf(text_extracted[1])
-    news_separated = TextMiner.separar_noticias(text_extracted)
-    json_output = TextMiner.formatear_json(fecha, news_separated)
-    FilesHelpers.save_news_in_json(json_output)
-
-    for date in data.dates:
-        news_list = FilesHelpers.read_news_from_json_by_date(date)
-
-        if not news_list:
-            all_results.append({
-                "fecha": date,
-                "conteo": [{"derecho": d, "cantidad": 0, "lugares": [""]} for d in data.rights],
-                "respuesta_cruda": "No hay noticias disponibles para esta fecha."
+        # Validación de presencia y tipo
+        if not isinstance(fechas, list) or not fechas:
+            await websocket.send_json({
+                "type": "error",
+                "message": "El campo 'dates' es obligatorio y debe ser una lista no vacía."
             })
-            continue
+            return
 
-        conteo_total = {d: {"cantidad": 0, "lugares": []} for d in data.rights}
+        if not isinstance(derechos, list) or not derechos:
+            await websocket.send_json({
+                "type": "error",
+                "message": "El campo 'rights' es obligatorio y debe ser una lista no vacía."
+            })
+            return
 
-        for noticia in news_list:
-            print("DEBUG noticia:", noticia)
-
-            # 💾 Verificar si ya existe la noticia
-            noticia_existente = db.query(models.News).filter_by(
-                headline=noticia["titular"],
-                news_date=noticia["fecha"]
-            ).first()
-
-            analisis_previos = []
-            derechos_previos = set()
-
-            if noticia_existente:
-                all_news_id.append(noticia_existente.id_news)
-
-                # ✅ Buscar todos los análisis asociados a esa noticia
-                analisis_asociados = db.query(models.Analysis).filter_by(
-                    id_news=noticia_existente.id_news
-                ).order_by(models.Analysis.analysis_date.desc()).all()
-
-                for analisis in analisis_asociados:
-                    derechos_en_analisis = db.query(models.AnalysisRight).join(models.Right).filter(
-                        models.AnalysisRight.id_analysis == analisis.id_analysis
-                    ).with_entities(models.Right.right).all()
-
-                    derechos_set = set(d[0] for d in derechos_en_analisis)
-
-                    if derechos_set:
-                        derechos_previos |= derechos_set
-                        analisis_previos.append((analisis, derechos_set))
-
-            # Determinar qué derechos ya han sido analizados
-            derechos_solicitados = set(data.rights)
-            derechos_existentes = derechos_previos & derechos_solicitados
-            derechos_nuevos = derechos_solicitados - derechos_previos
-
-            analisis = []
-
-            # ✅ Recuperar derechos ya analizados
-            if derechos_existentes:
-                for analisis_previo, derechos_en_analisis in analisis_previos:
-                    if derechos_en_analisis & derechos_existentes:
-                        contenido = json.loads(analisis_previo.content)
-                        analisis += [item for item in contenido if item["derecho"] in derechos_existentes]
-
-            # ✅ Ejecutar LLM solo para los derechos nuevos
-            if derechos_nuevos:
-                prompt = NewsProcessorService.build_prompt(noticia, date, list(derechos_nuevos))
-                respuesta_str = NewsProcessorService.get_ollama_response(prompt)
-
-                try:
-                    nuevos_items = json.loads(respuesta_str)
-                    analisis += nuevos_items
-
-                    # 💾 Guardar noticia solo si no existía
-                    if not noticia_existente:
-                        noticia_guardada = NewsService.save_news(
-                            db,
-                            headline=noticia["titular"],
-                            content=noticia["contenido"],
-                            news_date=datetime.strptime(noticia["fecha"], "%Y-%m-%d")
-                        )
-
-                        all_news_id.append(noticia_guardada.id_news)
-                    else:
-                        noticia_guardada = noticia_existente
-
-                    # 💾 Guardar nuevo análisis con derechos nuevos
-                    analisis_guardado = AnalysisService.save_analysis(
-                        db,
-                        content=json.dumps(nuevos_items, ensure_ascii=False),
-                        news_id=noticia_guardada.id_news,
-                        analysis_date=datetime.now()
-                    )
-
-                    derechos_db = db.query(models.Right).filter(models.Right.right.in_(derechos_nuevos)).all()
-                    derechos_ids = [d.id_right for d in derechos_db]
-
-                    AnalysisRightService.link_rights_to_analysis(
-                        db,
-                        analysis_id=analisis_guardado.id_analysis,
-                        rights_ids=derechos_ids
-                    )
-
-                except Exception as e:
-                    print("❌ Error al parsear JSON:", e)
-                    analisis += [{"derecho": d, "cantidad": 0, "lugares": []} for d in derechos_nuevos]
-
-            # 📊 Acumular conteo total por derecho
-            for item in analisis:
-                derecho = item["derecho"]
-                if derecho in conteo_total:
-                    conteo_total[derecho]["cantidad"] += item["cantidad"]
-                    conteo_total[derecho]["lugares"].extend(item["lugares"])
-
-        conteo_final = [{
-            "derecho": d,
-            "cantidad": conteo_total[d]["cantidad"],
-            "lugares": list(set(conteo_total[d]["lugares"]))
-        } for d in data.rights]
-
-        all_results.append({
-            "fecha": date,
-            "conteo": conteo_final,
-            "respuesta_cruda": "[Individual responses collected per news item]"
+        # Validación de formato de fechas
+        for f in fechas:
+            try:
+                datetime.strptime(f, "%Y-%m-%d")
+            except ValueError:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": f"La fecha '{f}' no tiene el formato válido YYYY-MM-DD."
+                })
+                return
+            
+        fecha_inicio, fecha_fin = fechas[0], fechas[1]
+        dates_rango = DateHelpers.generar_rango_fechas(fecha_inicio, fecha_fin)
+            
+        await websocket.send_json({"type": "status", "message": "Iniciando minado de noticias"})
+            
+        # Leer PDFs de la carpeta "newspaper"
+        pdf_files = TextMiner.leer_pdf("newspaper")
+        await websocket.send_json({
+            "type": "progress",
+            "etapa": "Minado de noticias",
+            "message": "PDF leídos",
+            "progreso": 4
         })
 
-    # 💾 Guardar CSV si es necesario
-    FilesHelpers.save_results_in_csv(all_results)
+        await websocket.send_json({"type": "status", "message": "Extrayendo texto de PDFs"})
 
-    resultados = [
-        ProcessResult(
-            fecha=r["fecha"],
-            conteo=[
-                RightCount(
-                    derecho=item["derecho"],
-                    cantidad=item["cantidad"],
-                    lugares=list(set(item["lugares"]))
-                ) for item in r["conteo"]
-            ]
-        ) for r in all_results
-    ]
+        # Extraer texto de los PDFs
+        text_extracted = TextMiner.extraer_texto_pdf(pdfs=pdf_files)
+        await websocket.send_json({
+            "type": "progress",
+            "etapa": "Minado de noticias",
+            "message": "Texto extraído de PDFs",
+            "progreso": 12
+        })
 
-    return ProcessNewsResponse(resultados=resultados, noticias=[str(n_id) for n_id in set(all_news_id)])
+        print("DEBUG text_extracted:", text_extracted)
 
-# @router.post("/extract")
-# def extract_news():
-#     pdf_files = TextMiner.leer_pdf("newspaper")
-#     text_extracted = TextMiner.extraer_texto_pdf(pdfs=pdf_files)
+        await websocket.send_json({"type": "status", "message": "Separando y formateando noticias mediante IA"})
+        
+        # Extraer fecha del primer elemento del texto extraído
+        fecha = TextMiner.extraer_fecha_pdf(text_extracted[1])
+        
+        # Separar noticias utilizando IA
+        news_separated = TextMiner.separar_noticias(text_extracted)
+        await websocket.send_json({
+            "type": "progress",
+            "etapa": "Minado de noticias",
+            "message": "Noticias separadas por IA",
+            "progreso": 25
+        })
 
-#     print("DEBUG text_extracted:", text_extracted)
+        # Formatear noticias en JSON
+        json_output = TextMiner.formatear_json(fecha, news_separated)
 
-#     fecha = TextMiner.extraer_fecha_pdf(text_extracted[1])
-#     news_separated = TextMiner.separar_noticias(text_extracted)
-#     json_output = TextMiner.formatear_json(fecha, news_separated)
-#     FilesHelpers.save_news_in_json(json_output)
+        # Guardar noticias en un archivo JSON
+        news_filepath = FilesHelpers.save_news_in_json(json_output)
+        await websocket.send_json({
+            "type": "progress",
+            "etapa": "minado",
+            "message": "Noticias formateadas en JSON",
+            "progreso": 30
+        })
+
+        # Ejecutar el análisis de noticias
+        await websocket.send_json({"type": "status", "message": "Iniciando análisis de noticias"})
+
+        resultados, noticias_ids = await NewsProcessorService.process_news_batch(
+            db=db,
+            news_filepath=news_filepath,
+            dates=dates_rango,
+            rights=derechos,
+            websocket=websocket
+        )
+
+        await websocket.send_json({
+            "type": "result",
+            "resultados": [r.dict() for r in resultados],
+            "noticias": noticias_ids
+        })
+
+    except Exception as e:
+        await websocket.send_json({
+            "type": "error",
+            "message": f"Error inesperado: {str(e)}"
+        })
+
+    finally:
+        await websocket.close()
 
 
 @router.post("/details", response_model=List[NewsDetailsResponse])
-def obtener_detalle_noticias(payload: NewsIdsRequest, db: Session = Depends(get_db)):
-    noticias = db.query(models.News).filter(models.News.id_news.in_(payload.ids)).all()
-    return noticias
+def obtener_detalle_noticias(payload: NewsDetailsRequest, db: Session = Depends(get_db)):
+    """
+    Devuelve los detalles de noticias con su análisis asociado,
+    filtrando solo los derechos solicitados.
+    """
+
+    # Consulta directa: News JOIN Analysis (uno a uno)
+    query = (
+        db.query(
+            NewsModel.News.id_news,
+            NewsModel.News.headline,
+            NewsModel.News.content,
+            NewsModel.News.news_date,
+            AnalysisModel.Analysis.content.label("analysis_content")
+        )
+        .outerjoin(AnalysisModel.Analysis, NewsModel.News.id_news == AnalysisModel.Analysis.id_news)
+        .filter(NewsModel.News.id_news.in_(payload.ids))
+    )
+
+    rows = query.all()
+    resultado = []
+
+    for row in rows:
+        filtered_analysis = []
+
+        if row.analysis_content:
+            try:
+                parsed = json.loads(row.analysis_content)
+                filtered_analysis = [
+                    item for item in parsed
+                    if item.get("derecho") in payload.rights
+                ]
+            except json.JSONDecodeError:
+                # Si el análisis no es JSON válido, lo ignoramos
+                pass
+
+        resultado.append(NewsDetailsResponse(
+            id_news=row.id_news,
+            headline=row.headline,
+            content=row.content,
+            news_date=row.news_date,
+            filtered_analysis=filtered_analysis
+        ))
+
+    return resultado

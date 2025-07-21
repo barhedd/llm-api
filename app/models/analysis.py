@@ -12,8 +12,4 @@ class Analysis(Base):
     id_news = Column(UNIQUEIDENTIFIER, ForeignKey("news.id_news"), nullable=False)
     
     news = relationship("News", back_populates="analyses")
-    rights = relationship(
-        "Right",
-        secondary="analysis_right",
-        back_populates="analyses"
-    )
+    details = relationship("AnalysisDetail", back_populates="analysis", cascade="all, delete-orphan")

@@ -1,11 +1,10 @@
 from sqlalchemy.orm import Session
-from uuid import uuid4
-from app import models
+from app.models.right import Right
 
 def get_all_visible_rights(db: Session):
     return (
-        db.query(models.Right)
-        .filter(models.Right.visible == True)
-        .order_by(models.Right.order.asc())
+        db.query(Right)
+        .filter(Right.visible == True)
+        .order_by(Right.order.asc())
         .all()
     )
