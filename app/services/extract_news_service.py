@@ -177,16 +177,41 @@ def formatear_json(strdate: str, json_news: List[str]) -> List[Dict[str, Any]]:
     fecha_str = strdate
     parsed_news = []
     ommited_items = []
+    clave_map = {
+        "title": "titular",
+        "titulo": "titular",
+        "título": "titular",
+        "content": "contenido",
+        "contenido": "contenido"
+    }
 
     for item in json_news:
         try:
             noticias = json.loads(item) 
             for noticia in noticias:
                 if isinstance(noticia, dict):
+                    nueva_noticia = {}
+                    for clave_original, valor in noticia.items():
+                        clave_normalizada = clave_map.get(clave_original, clave_original)
+                        nueva_noticia[clave_normalizada] = valor
+
+                    claves = list(nueva_noticia.keys())
+                    if claves != ["titular", "contenido"]:
+                        print("Noticia omitida por claves no válidas:", claves)
+                        ommited_items.append(item)
+                        continue
                     noticia["fecha"] = fecha_str
-                    if "contenido" in noticia and isinstance(noticia["contenido"], str):
-                        noticia["contenido"] = noticia["contenido"].replace('"', '')
-            parsed_news.extend(noticias)
+
+                    noticia_final = {
+                        "titular": nueva_noticia["titular"],
+                        "fecha": nueva_noticia["fecha"],
+                        "contenido": nueva_noticia["contenido"]
+                    }
+
+                    if isinstance(noticia_final["contenido"], str):
+                        noticia_final["contenido"] = noticia_final["contenido"].replace('"', '')
+
+                    parsed_news.append(noticia_final)
         except json.JSONDecodeError as e:
             print("Error al decodificar este item, será omitido:\n", item)
             ommited_items.append(item)
