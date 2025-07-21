@@ -200,7 +200,7 @@ def formatear_json(strdate: str, json_news: List[str]) -> List[Dict[str, Any]]:
                         print("Noticia omitida por claves no válidas:", claves)
                         ommited_items.append(item)
                         continue
-                    noticia["fecha"] = fecha_str
+                    nueva_noticia["fecha"] = fecha_str
 
                     noticia_final = {
                         "titular": nueva_noticia["titular"],

@@ -84,7 +84,9 @@ async def process_rights_ws(websocket: WebSocket, db: Session = Depends(get_db))
         
         # Extraer fecha del primer elemento del texto extraído
         fecha = TextMiner.extraer_fecha_pdf(text_extracted[1])
-        
+
+        print("FECHA EXTRAÍDA", fecha)
+
         # Separar noticias utilizando IA
         news_separated = TextMiner.separar_noticias(text_extracted)
         await websocket.send_json({
